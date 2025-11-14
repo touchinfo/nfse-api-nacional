@@ -1,0 +1,43 @@
+{
+  "name": "nfse-api",
+  "version": "1.0.0",
+  "description": "API para emissão de NFS-e Nacional com assinatura digital",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "test": "jest"
+  },
+  "keywords": [
+    "nfse",
+    "nota-fiscal",
+    "api",
+    "certificado-digital"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@xmldom/xmldom": "^0.8.10",
+    "axios": "^1.6.2",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "crypto-js": "^4.2.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "helmet": "^7.1.0",
+    "multer": "^2.0.2",
+    "mysql2": "^3.6.5",
+    "node-forge": "^1.3.1",
+    "winston": "^3.11.0",
+    "xml-crypto": "^6.1.2",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
