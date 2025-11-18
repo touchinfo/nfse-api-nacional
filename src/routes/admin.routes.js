@@ -13,10 +13,12 @@ const upload = multer({
     limits: {
         fileSize: 5 * 1024 * 1024 // 5MB max
     },
+    // A CORREÇÃO ESTÁ AQUI: Adicione 'req' como primeiro argumento
     fileFilter: (req, file, cb) => {
+        // Verificação de segurança adicional usando Optional Chaining (?.)
         if (file.mimetype === 'application/x-pkcs12' || 
-            file.originalname.endsWith('.pfx') || 
-            file.originalname.endsWith('.p12')) {
+            file.originalname?.endsWith('.pfx') || 
+            file.originalname?.endsWith('.p12')) {
             cb(null, true);
         } else {
             cb(new Error('Apenas arquivos .pfx ou .p12 são permitidos'));
@@ -28,7 +30,7 @@ const upload = multer({
  * Valida senha admin
  */
 function validarSenhaAdmin(senha) {
-    const SENHA_ADMIN = process.env.ADMIN_PASSWORD || 'admin123MUDE';
+    const SENHA_ADMIN = process.env.ADMIN_PASSWORD;
     return senha === SENHA_ADMIN;
 }
 
@@ -116,14 +118,14 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             });
         }
         
-        // Extrai dados do body
+        // Extrai dados do body (usando nomes originais: cnpj, cep)
         const {
-            cnpj,
+            cnpj, // CNPJ com pontuação (ex: 00.000.000/0000-00)
             razao_social,
             nome_fantasia,
             inscricao_municipal,
             codigo_municipio,
-            cep,
+            cep, // CEP com pontuação (ex: 00000-000)
             logradouro,
             numero,
             complemento,
@@ -137,9 +139,13 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             tipo_ambiente,
             versao_aplicacao
         } = req.body;
-        
-        // Validações básicas
-        if (!cnpj || cnpj.length !== 14) {
+
+
+        const rawCnpj = cnpj ? cnpj.replace(/\D/g, '') : null;
+        const rawCep = cep ? cep.replace(/\D/g, '') : null; 
+
+        // Validações básicas (usando rawCnpj)
+        if (!rawCnpj || rawCnpj.length !== 14) {
             return res.status(400).json({
                 sucesso: false,
                 erro: 'CNPJ inválido (deve ter 14 dígitos sem pontuação)'
@@ -239,12 +245,12 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
         `;
         
         const params = [
-            cnpj,
+            rawCnpj,
             razao_social,
             nome_fantasia || null,
             inscricao_municipal || null,
             codigo_municipio,
-            cep,
+            rawCep,
             logradouro,
             numero,
             complemento || null,
@@ -559,6 +565,249 @@ router.get('/consultar-apikey/:cnpj', async (req, res, next) => {
         
     } catch (error) {
         console.error('❌ Erro ao consultar API Key:', error);
+        next(error);
+    }
+});
+
+/**
+ * POST /api/admin/atualizar-certificado
+ * Atualiza o certificado digital de uma empresa
+ */
+router.post('/atualizar-certificado', upload.single('certificado'), async (req, res, next) => {
+    try {
+        console.log('📄 Atualizando certificado digital...');
+        
+        // Valida senha admin
+        const { senha_admin } = req.body;
+        if (!validarSenhaAdmin(senha_admin)) {
+            return res.status(401).json({
+                sucesso: false,
+                erro: 'Senha administrativa inválida'
+            });
+        }
+        
+        // Valida se certificado foi enviado
+        if (!req.file) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Certificado digital (.pfx ou .p12) não foi enviado'
+            });
+        }
+        
+        const { cnpj, senha_certificado } = req.body;
+        
+        // Validações básicas
+        if (!cnpj || cnpj.length !== 14) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'CNPJ inválido (deve ter 14 dígitos sem pontuação)'
+            });
+        }
+        
+        if (!senha_certificado) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Senha do certificado é obrigatória'
+            });
+        }
+        
+        console.log(`  → CNPJ: ${cnpj}`);
+        
+        // Verifica se empresa existe
+        const sqlVerifica = 'SELECT id, cnpj, razao_social, certificado_validade FROM empresas WHERE cnpj = ?';
+        const empresasExistentes = await query(sqlVerifica, [cnpj]);
+        
+        if (empresasExistentes.length === 0) {
+            return res.status(404).json({
+                sucesso: false,
+                erro: 'Empresa não encontrada',
+                mensagem: 'Use a rota /api/admin/cadastrar-empresa para cadastrar uma nova empresa'
+            });
+        }
+        
+        const empresaAtual = empresasExistentes[0];
+        
+        console.log(`  → Empresa: ${empresaAtual.razao_social}`);
+        console.log(`  → Certificado atual vence em: ${new Date(empresaAtual.certificado_validade).toLocaleDateString()}`);
+        
+        // Valida novo certificado
+        console.log('  → Validando novo certificado digital...');
+        const certInfo = validarCertificado(req.file.buffer, senha_certificado);
+        
+        if (!certInfo.valido) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Certificado inválido ou senha incorreta',
+                detalhes: certInfo.erro
+            });
+        }
+        
+        console.log(`  → Novo certificado válido!`);
+        console.log(`     Titular: ${certInfo.titular}`);
+        console.log(`     CNPJ Cert: ${certInfo.cnpj}`);
+        console.log(`     Validade: ${certInfo.validadeFim.toLocaleDateString()}`);
+        console.log(`     Dias restantes: ${certInfo.diasRestantes}`);
+        
+        // Aviso se CNPJ do certificado é diferente
+        if (certInfo.cnpj && certInfo.cnpj !== cnpj) {
+            console.warn(`  ⚠️  AVISO: CNPJ do certificado (${certInfo.cnpj}) diferente do CNPJ da empresa (${cnpj})`);
+        }
+        
+        // Verifica se o novo certificado é realmente mais recente
+        const validadeAtual = new Date(empresaAtual.certificado_validade);
+        if (certInfo.validadeFim <= validadeAtual) {
+            console.warn(`  ⚠️  AVISO: Novo certificado vence antes ou na mesma data que o atual`);
+        }
+        
+        // Criptografa senha do certificado
+        console.log('  → Criptografando senha...');
+        const senhaEncrypted = encryptSenha(senha_certificado);
+        
+        // Atualiza no banco
+        console.log('  → Atualizando no banco de dados...');
+        const sqlUpdate = `
+            UPDATE empresas 
+            SET 
+                certificado_pfx = ?,
+                senha_certificado_encrypted = ?,
+                certificado_validade = ?,
+                certificado_emissor = ?,
+                certificado_titular = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE cnpj = ?
+        `;
+        
+        const params = [
+            req.file.buffer,
+            senhaEncrypted,
+            certInfo.validadeFim.toISOString().split('T')[0],
+            certInfo.emissor,
+            certInfo.titular,
+            cnpj
+        ];
+        
+        await query(sqlUpdate, params);
+        
+        console.log('✅ Certificado atualizado com sucesso!');
+        
+        res.json({
+            sucesso: true,
+            mensagem: 'Certificado digital atualizado com sucesso!',
+            empresa: {
+                cnpj: cnpj,
+                razaoSocial: empresaAtual.razao_social
+            },
+            certificadoAnterior: {
+                validade: empresaAtual.certificado_validade,
+                status: 'substituído'
+            },
+            certificadoNovo: {
+                titular: certInfo.titular,
+                emissor: certInfo.emissor,
+                validade: certInfo.validadeFim,
+                diasRestantes: certInfo.diasRestantes,
+                status: certInfo.diasRestantes > 30 ? 'válido' : certInfo.diasRestantes > 0 ? 'vencendo' : 'vencido'
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao atualizar certificado:', error);
+        next(error);
+    }
+});
+
+/**
+ * GET /api/admin/certificados-vencendo
+ * Lista certificados próximos do vencimento ou já vencidos
+ */
+router.get('/certificados-vencendo', async (req, res, next) => {
+    try {
+        const { senha_admin, dias } = req.query;
+        
+        if (!validarSenhaAdmin(senha_admin)) {
+            return res.status(401).json({
+                sucesso: false,
+                erro: 'Senha administrativa inválida'
+            });
+        }
+        
+        const diasAlerta = parseInt(dias) || 30;
+        
+        console.log(`🔔 Verificando certificados que vencem em ${diasAlerta} dias...`);
+        
+        const sql = `
+            SELECT 
+                id,
+                cnpj,
+                razao_social,
+                certificado_validade,
+                certificado_titular,
+                certificado_emissor,
+                DATEDIFF(certificado_validade, CURDATE()) as dias_restantes,
+                ativa
+            FROM empresas
+            WHERE DATEDIFF(certificado_validade, CURDATE()) <= ?
+            ORDER BY certificado_validade ASC
+        `;
+        
+        const empresas = await query(sql, [diasAlerta]);
+        
+        const certificados = empresas.map(emp => {
+            const diasRestantes = emp.dias_restantes;
+            let status, severidade;
+            
+            if (diasRestantes < 0) {
+                status = 'vencido';
+                severidade = 'critico';
+            } else if (diasRestantes === 0) {
+                status = 'vence hoje';
+                severidade = 'critico';
+            } else if (diasRestantes <= 7) {
+                status = 'vencendo em breve';
+                severidade = 'alto';
+            } else if (diasRestantes <= 30) {
+                status = 'próximo ao vencimento';
+                severidade = 'medio';
+            } else {
+                status = 'válido';
+                severidade: 'baixo';
+            }
+            
+            return {
+                cnpj: emp.cnpj,
+                razaoSocial: emp.razao_social,
+                titular: emp.certificado_titular,
+                emissor: emp.certificado_emissor,
+                validade: emp.certificado_validade,
+                diasRestantes: diasRestantes,
+                status: status,
+                severidade: severidade,
+                empresaAtiva: emp.ativa === 1,
+                acao: diasRestantes <= 0 ? 'RENOVAR IMEDIATAMENTE' : 'Agendar renovação'
+            };
+        });
+        
+        // Agrupa por severidade
+        const resumo = {
+            criticos: certificados.filter(c => c.severidade === 'critico').length,
+            altos: certificados.filter(c => c.severidade === 'alto').length,
+            medios: certificados.filter(c => c.severidade === 'medio').length,
+            baixos: certificados.filter(c => c.severidade === 'baixo').length
+        };
+        
+        res.json({
+            sucesso: true,
+            parametros: {
+                diasAlerta: diasAlerta,
+                dataConsulta: new Date().toISOString()
+            },
+            resumo: resumo,
+            total: certificados.length,
+            certificados: certificados
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao listar certificados vencendo:', error);
         next(error);
     }
 });

@@ -95,9 +95,11 @@ class CertificadoService {
             SELECT 
                 id,
                 cnpj,
+                razao_social,
                 certificado_pfx,
                 senha_certificado_encrypted,
                 certificado_validade,
+                DATEDIFF(certificado_validade, CURDATE()) as dias_restantes,
                 ativa
             FROM empresas
             WHERE cnpj = ? AND ativa = TRUE
@@ -114,9 +116,28 @@ class CertificadoService {
         // Verifica validade do certificado
         const hoje = new Date();
         const validade = new Date(empresa.certificado_validade);
+        const diasRestantes = empresa.dias_restantes;
         
         if (hoje > validade) {
-            throw new Error('Certificado digital vencido. Atualize o certificado da empresa.');
+            throw new Error(
+                `❌ CERTIFICADO DIGITAL VENCIDO!\n` +
+                `Empresa: ${empresa.razao_social} (${cnpj})\n` +
+                `Validade: ${validade.toLocaleDateString('pt-BR')}\n` +
+                `Vencido há ${Math.abs(diasRestantes)} dias\n` +
+                `⚠️  Ação necessária: Atualize o certificado digital através da rota POST /api/admin/atualizar-certificado`
+            );
+        }
+        
+        // Aviso se certificado está próximo do vencimento
+        if (diasRestantes <= 30 && diasRestantes > 0) {
+            console.warn('\n' + '='.repeat(70));
+            console.warn('⚠️  ATENÇÃO: CERTIFICADO PRÓXIMO DO VENCIMENTO!');
+            console.warn('='.repeat(70));
+            console.warn(`Empresa: ${empresa.razao_social} (${cnpj})`);
+            console.warn(`Validade: ${validade.toLocaleDateString('pt-BR')}`);
+            console.warn(`Dias restantes: ${diasRestantes}`);
+            console.warn(`Recomendação: Renove o certificado digital o quanto antes`);
+            console.warn('='.repeat(70) + '\n');
         }
         
         // Descriptografa a senha
@@ -125,9 +146,11 @@ class CertificadoService {
         return {
             empresaId: empresa.id,
             cnpj: empresa.cnpj,
+            razaoSocial: empresa.razao_social,
             certificadoBuffer: empresa.certificado_pfx,
             senha: senhaDecrypted,
-            validade: empresa.certificado_validade
+            validade: empresa.certificado_validade,
+            diasRestantes: diasRestantes
         };
     }
 
@@ -181,7 +204,10 @@ class CertificadoService {
                 cnpj,
                 razao_social,
                 certificado_validade,
-                DATEDIFF(certificado_validade, CURDATE()) as dias_restantes
+                certificado_titular,
+                certificado_emissor,
+                DATEDIFF(certificado_validade, CURDATE()) as dias_restantes,
+                ativa
             FROM empresas
             WHERE ativa = TRUE
             AND DATEDIFF(certificado_validade, CURDATE()) <= ?
@@ -190,6 +216,43 @@ class CertificadoService {
         `;
         
         return await query(sql, [diasAlerta]);
+    }
+
+    /**
+     * Gera relatório de status de certificados
+     */
+    static async gerarRelatorioStatusCertificados() {
+        const sql = `
+            SELECT 
+                id,
+                cnpj,
+                razao_social,
+                certificado_validade,
+                DATEDIFF(certificado_validade, CURDATE()) as dias_restantes,
+                ativa,
+                CASE 
+                    WHEN DATEDIFF(certificado_validade, CURDATE()) < 0 THEN 'vencido'
+                    WHEN DATEDIFF(certificado_validade, CURDATE()) = 0 THEN 'vence_hoje'
+                    WHEN DATEDIFF(certificado_validade, CURDATE()) <= 7 THEN 'critico'
+                    WHEN DATEDIFF(certificado_validade, CURDATE()) <= 30 THEN 'alerta'
+                    ELSE 'ok'
+                END as status
+            FROM empresas
+            WHERE ativa = TRUE
+            ORDER BY dias_restantes ASC
+        `;
+        
+        const empresas = await query(sql);
+        
+        return {
+            total: empresas.length,
+            vencidos: empresas.filter(e => e.status === 'vencido').length,
+            venceHoje: empresas.filter(e => e.status === 'vence_hoje').length,
+            criticos: empresas.filter(e => e.status === 'critico').length,
+            alertas: empresas.filter(e => e.status === 'alerta').length,
+            ok: empresas.filter(e => e.status === 'ok').length,
+            empresas: empresas
+        };
     }
 }
 
