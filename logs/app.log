@@ -100,3 +100,25 @@
 {"level":"info","message":{"duration":"134ms","empresa":"não autenticado","ip":"::1","method":"POST","status":400,"url":"/api/admin/cadastrar-empresa"},"timestamp":"2025-11-18T18:00:24.894Z"}
 {"level":"info","message":{"duration":"127ms","empresa":"não autenticado","ip":"::1","method":"POST","status":400,"url":"/api/admin/cadastrar-empresa"},"timestamp":"2025-11-18T18:00:27.152Z"}
 {"level":"info","message":{"duration":"423ms","empresa":"não autenticado","ip":"::1","method":"POST","status":201,"url":"/api/admin/cadastrar-empresa"},"timestamp":"2025-11-18T18:00:28.860Z"}
+{"level":"info","message":{"duration":"254ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:20:05.657Z"}
+{"level":"info","message":{"duration":"119ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:20:08.245Z"}
+{"level":"info","message":{"duration":"605ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/parametros-convenio/4315602"},"timestamp":"2025-11-21T17:20:21.373Z"}
+{"level":"info","message":{"duration":"115ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:20:32.694Z"}
+{"level":"info","message":{"duration":"244ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:24:57.370Z"}
+{"level":"info","message":{"duration":"119ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:24:59.269Z"}
+{"level":"info","message":{"duration":"116ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:25:18.018Z"}
+{"level":"info","message":{"duration":"116ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:25:19.515Z"}
+{"level":"info","message":{"duration":"272ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:25:37.086Z"}
+{"level":"info","message":{"duration":"123ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:25:38.500Z"}
+{"level":"info","message":{"duration":"117ms","empresa":"01800344000148","ip":"::1","method":"GET","status":404,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:26:31.661Z"}
+{"level":"info","message":{"duration":"2ms","empresa":"não autenticado","ip":"::1","method":"GET","status":200,"url":"/api/health"},"timestamp":"2025-11-21T17:26:47.796Z"}
+{"level":"info","message":{"duration":"116ms","empresa":"01800344000148","ip":"::1","method":"POST","status":400,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:26:53.292Z"}
+{"level":"info","message":{"duration":"125ms","empresa":"01800344000148","ip":"::1","method":"POST","status":422,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:27:32.833Z"}
+{"level":"info","message":{"duration":"128ms","empresa":"01800344000148","ip":"::1","method":"POST","status":422,"url":"/api/nfse/emitir"},"timestamp":"2025-11-21T17:28:00.604Z"}
+{"level":"info","message":{"duration":"121ms","empresa":"01800344000148","ip":"::1","method":"POST","status":422,"url":"/api/nfse/emitir"},"timestamp":"2025-11-21T17:28:07.121Z"}
+{"level":"info","message":{"duration":"121ms","empresa":"01800344000148","ip":"::1","method":"POST","status":422,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:28:24.476Z"}
+{"level":"info","message":{"duration":"126ms","empresa":"01800344000148","ip":"::1","method":"POST","status":422,"url":"/api/nfse/emitir"},"timestamp":"2025-11-21T17:28:59.939Z"}
+{"level":"info","message":{"duration":"270ms","empresa":"01800344000148","ip":"::1","method":"POST","status":422,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:35:32.048Z"}
+{"level":"info","message":{"duration":"124ms","empresa":"01800344000148","ip":"::1","method":"POST","status":422,"url":"/api/nfse/validar"},"timestamp":"2025-11-21T17:35:40.650Z"}
+{"level":"info","message":{"duration":"141ms","empresa":"01800344000148","ip":"::1","method":"POST","status":422,"url":"/api/nfse/emitir"},"timestamp":"2025-11-21T17:35:53.322Z"}
+{"level":"info","message":{"duration":"123ms","empresa":"01800344000148","ip":"::1","method":"POST","status":422,"url":"/api/nfse/emitir"},"timestamp":"2025-11-21T17:36:32.776Z"}

@@ -3,6 +3,7 @@ const { SignedXml } = require('xml-crypto');
 const zlib = require('zlib');
 const xml2js = require('xml2js');
 const CertificadoService = require('./certificadoService');
+const ValidacaoXSDService = require('./validacaoXSDService');
 
 /**
  * Service para manipulação de XML da NFS-e
@@ -212,23 +213,55 @@ class XMLService {
     }
 
     /**
-     * Processo completo: valida, assina e comprime
+     * Processo completo: valida (XSD + regras), assina e comprime
      */
     static async processarXML(xmlString, cnpjEmpresa) {
         console.log('📄 Iniciando processamento do XML...');
         
-        // 1. Valida XML
-        console.log('  → Validando XML...');
-        const validacao = this.validarXML(xmlString);
-        if (!validacao.valido) {
-            throw new Error(`XML inválido: ${validacao.erro}`);
+        // 1. VALIDAÇÃO XSD COMPLETA (NOVO!)
+        console.log('  → Executando validação XSD completa...');
+        const validacaoXSD = await ValidacaoXSDService.validarXMLCompleto(xmlString);
+        
+        if (!validacaoXSD.valido) {
+            console.log('  ✗ Validação XSD falhou!');
+            
+            // Formata erros para retorno
+            const errosFormatados = validacaoXSD.erros.map(erro => ({
+                codigo: erro.codigo,
+                mensagem: erro.mensagem,
+                campo: erro.campo
+            }));
+            
+            throw new Error(JSON.stringify({
+                tipo: 'VALIDACAO_XSD',
+                mensagem: 'XML não está em conformidade com o schema do emissor nacional',
+                erros: errosFormatados,
+                totalErros: errosFormatados.length
+            }));
         }
         
-        // 2. Extrai informações
-        console.log('  → Extraindo informações da DPS...');
-        const infoDPS = await this.extrairInformacoesDPS(xmlString);
+        // Mostra warnings se houver
+        if (validacaoXSD.warnings && validacaoXSD.warnings.length > 0) {
+            console.log('  ⚠️  Avisos de validação:');
+            validacaoXSD.warnings.forEach(warning => {
+                console.log(`     - ${warning.codigo}: ${warning.mensagem}`);
+            });
+        }
+        
+        console.log(`  ✓ Validação XSD concluída! (${validacaoXSD.tempoValidacao}ms)`);
+        
+        // 2. Extrai informações validadas
+        const infoDPS = {
+            idDPS: validacaoXSD.dados.id,
+            numeroDPS: validacaoXSD.dados.nDPS,
+            serieDPS: validacaoXSD.dados.serie,
+            cnpjPrestador: validacaoXSD.dados.cnpjPrestador,
+            cnpjTomador: validacaoXSD.dados.cnpjTomador,
+            cpfTomador: validacaoXSD.dados.cpfTomador
+        };
         
         // 3. Valida CNPJ da empresa com o XML
+        console.log('  → Validando CNPJ da empresa...');
         if (infoDPS.cnpjPrestador !== cnpjEmpresa) {
             throw new Error(
                 `CNPJ do prestador no XML (${infoDPS.cnpjPrestador}) ` +
@@ -236,20 +269,11 @@ class XMLService {
             );
         }
         
-        // 4. Valida regras de negócio
-        console.log('  → Validando regras de negócio...');
-        const validacaoRegras = this.validarRegrasDPS(infoDPS);
-        if (!validacaoRegras.valido) {
-            throw new Error(
-                `Erro de validação: ${JSON.stringify(validacaoRegras.erros)}`
-            );
-        }
-        
-        // 5. Busca certificado da empresa
+        // 4. Busca certificado da empresa
         console.log('  → Buscando certificado digital...');
         const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
         
-        // 6. Assina o XML
+        // 5. Assina o XML
         console.log('  → Assinando XML...');
         const xmlAssinado = this.assinarXML(
             xmlString,
@@ -257,7 +281,7 @@ class XMLService {
             certInfo.senha
         );
         
-        // 7. Comprime e codifica
+        // 6. Comprime e codifica
         console.log('  → Comprimindo e codificando...');
         const dpsXmlGZipB64 = this.comprimirECodificar(xmlAssinado);
         
@@ -267,7 +291,11 @@ class XMLService {
             infoDPS,
             xmlAssinado,
             dpsXmlGZipB64,
-            empresaId: certInfo.empresaId
+            empresaId: certInfo.empresaId,
+            validacao: {
+                tempoValidacao: validacaoXSD.tempoValidacao,
+                warnings: validacaoXSD.warnings || []
+            }
         };
     }
 }

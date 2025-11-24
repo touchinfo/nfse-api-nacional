@@ -76,8 +76,6 @@ router.get('/parametros-convenio/:codigoMunicipio', async (req, res, next) => {
     }
 });
 
-module.exports = router;
-
 /**
  * POST /api/nfse/emitir
  * Emite uma NFS-e processando o XML enviado
@@ -169,6 +167,7 @@ router.post('/emitir',
                     tempoTotal: `${tempoTotal}ms`,
                     ambiente: ambienteEnvio === '1' ? 'Produção' : 'Homologação'
                 },
+                validacao: resultado.validacao, // ← NOVO: Informações de validação
                 // Dados completos em desenvolvimento
                 ...(process.env.NODE_ENV !== 'production' && {
                     debug: {
@@ -181,6 +180,31 @@ router.post('/emitir',
             
         } catch (error) {
             console.error('❌ Erro na emissão:', error.message);
+            
+            // ============================================
+            // TRATAMENTO ESPECIAL PARA ERROS DE VALIDAÇÃO XSD
+            // ============================================
+            try {
+                const errorObj = JSON.parse(error.message);
+                if (errorObj.tipo === 'VALIDACAO_XSD') {
+                    console.log('  ⚠️  Erro de validação XSD detectado');
+                    console.log(`  ⚠️  Total de erros: ${errorObj.totalErros}`);
+                    
+                    return res.status(422).json({
+                        sucesso: false,
+                        tipo: 'validacao_xsd',
+                        mensagem: errorObj.mensagem,
+                        erros: errorObj.erros,
+                        totalErros: errorObj.totalErros,
+                        ajuda: 'Corrija os erros no XML antes de enviar novamente',
+                        documentacao: '/api/docs'
+                    });
+                }
+            } catch (e) {
+                // Não é um erro de validação XSD estruturado
+                // Continua para o handler geral de erros
+            }
+            
             next(error);
         }
     }
@@ -215,6 +239,7 @@ router.post('/validar',
                     cnpjPrestador: resultado.infoDPS.cnpjPrestador,
                     cnpjTomador: resultado.infoDPS.cnpjTomador
                 },
+                validacao: resultado.validacao, // ← NOVO: Informações de validação
                 debug: {
                     xmlAssinado: resultado.xmlAssinado,
                     tamanhoBase64: resultado.dpsXmlGZipB64.length
@@ -223,6 +248,31 @@ router.post('/validar',
             
         } catch (error) {
             console.error('❌ Erro na validação:', error.message);
+            
+            // ============================================
+            // TRATAMENTO ESPECIAL PARA ERROS DE VALIDAÇÃO XSD
+            // ============================================
+            try {
+                const errorObj = JSON.parse(error.message);
+                if (errorObj.tipo === 'VALIDACAO_XSD') {
+                    console.log('  ⚠️  Erro de validação XSD detectado');
+                    console.log(`  ⚠️  Total de erros: ${errorObj.totalErros}`);
+                    
+                    return res.status(422).json({
+                        sucesso: false,
+                        tipo: 'validacao_xsd',
+                        mensagem: errorObj.mensagem,
+                        erros: errorObj.erros,
+                        totalErros: errorObj.totalErros,
+                        ajuda: 'Corrija os erros no XML antes de enviar novamente',
+                        documentacao: '/api/docs'
+                    });
+                }
+            } catch (e) {
+                // Não é um erro de validação XSD estruturado
+                // Continua para o handler geral de erros
+            }
+            
             next(error);
         }
     }
