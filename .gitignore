@@ -3,5 +3,7 @@ node_modules/
 
 logs/
 
+./logs
+
 # Arquivos de ambiente (senhas, chaves de API)
 .env
