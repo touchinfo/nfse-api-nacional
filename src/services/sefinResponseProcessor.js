@@ -297,9 +297,92 @@ static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
         }
     }
 
-    static montarLinkConsulta(chaveAcesso, tipoAmbiente) {
-        const urlBase = tipoAmbiente === '1' ? 'https://sefin.producao.nfse.gov.br' : 'https://sefin.producaorestrita.nfse.gov.br';
-        return `${urlBase}/SefinNacional/nfse/${chaveAcesso}`;
+/**
+ * Monta link de consulta
+ */
+static montarLinkConsulta(chaveAcesso, tipoAmbiente) {
+    const urlBase = tipoAmbiente === '1'
+        ? 'https://sefin.producao.nfse.gov.br'
+        : 'https://sefin.producaorestrita.nfse.gov.br';
+
+    return `${urlBase}/SefinNacional/nfse/${chaveAcesso}`;
+}
+
+/**
+ * Monta link do PDF (DANFSE)
+ */
+static montarLinkPDF(chaveAcesso, tipoAmbiente) {
+    const urlBase = tipoAmbiente === '1'
+        ? 'https://adn.producao.nfse.gov.br'
+        : 'https://adn.producaorestrita.nfse.gov.br';
+
+    return `${urlBase}/danfse/${chaveAcesso}`;
+}
+
+/**
+     * Baixa o PDF (DANFSE) da SEFIN e retorna em Base64
+     * Utiliza o certificado digital para autenticação
+     */
+    static async baixarPDFBase64(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
+        try {
+            console.log(`   → Baixando PDF para chave: ${chaveAcesso}`);
+
+            // 1. Prepara o certificado
+            const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
+            
+            const { privateKeyPem, certificatePem } = 
+                CertificadoService.extrairCertificadoPEM(
+                    certInfo.certificadoBuffer,
+                    certInfo.senha
+                );
+
+            const httpsAgent = new https.Agent({
+                cert: certificatePem,
+                key: privateKeyPem,
+                rejectUnauthorized: tipoAmbiente === '1' // Valida SSL apenas em produção
+            });
+
+            // 2. Define a URL correta do PDF
+            const urlBase = tipoAmbiente === '1'
+                ? 'https://adn.producao.nfse.gov.br'
+                : 'https://adn.producaorestrita.nfse.gov.br';
+            
+            const urlPDF = `${urlBase}/danfse/${chaveAcesso}`;
+
+            // 3. Faz a requisição para pegar o binário do PDF
+            const response = await axios.get(urlPDF, {
+                httpsAgent: httpsAgent,
+                responseType: 'arraybuffer', // Essencial para arquivos binários
+                timeout: 30000
+            });
+
+            // 4. Converte Buffer para Base64
+            const pdfBase64 = Buffer.from(response.data, 'binary').toString('base64');
+            
+            // Calcula tamanho aproximado em KB para log/retorno
+            const tamanhoKB = (pdfBase64.length * 0.75 / 1024).toFixed(2); 
+
+            console.log(`   ✓ PDF baixado com sucesso (${tamanhoKB} KB)`);
+
+            return {
+                sucesso: true,
+                pdfBase64: pdfBase64,
+                tamanhoKB: `${tamanhoKB} KB`
+            };
+
+        } catch (error) {
+            console.error('   ❌ Erro ao baixar PDF:', error.message);
+            
+            let msgErro = error.message;
+            if (error.response && error.response.status === 404) {
+                msgErro = 'PDF ainda não disponível na SEFIN';
+            }
+
+            return {
+                sucesso: false,
+                erro: msgErro
+            };
+        }
     }
 
     static async atualizarTransmissaoComDadosNFSe(transmissaoId, dadosNFSe) {

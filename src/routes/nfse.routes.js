@@ -338,6 +338,7 @@ router.post('/validar',
 
 /**
  * GET /api/nfse/consultar-por-chave/:chaveAcesso
+ * Retorna dados + PDF Base64 para anexo de e-mail
  */
 router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
     try {
@@ -345,7 +346,7 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
         const cnpjEmpresa = req.empresa.cnpj;
         const tipoAmbiente = req.empresa.tipo_ambiente;
         
-        console.log(`🔍 Consultando NFS-e por chave: ${chaveAcesso.substring(0, 20)}...`);
+        console.log(`🔍 Consultando NFS-e: ${chaveAcesso.substring(0, 20)}...`);
         
         if (!chaveAcesso || chaveAcesso.length < 44) {
             return res.status(400).json({
@@ -354,7 +355,7 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
             });
         }
         
-        // 🔧 USA O MÉTODO QUE DESCOMPRIME
+        // 1. Consulta dados da NFS-e
         const resultado = await SefinResponseProcessor.consultarDadosNFSe(
             chaveAcesso,
             cnpjEmpresa,
@@ -369,7 +370,7 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
             });
         }
         
-        // 🔧 EXTRAI DPS LIMPA DO XML DESCOMPRIMIDO
+        // 2. Extrai DPS limpa
         let dpsLimpa = null;
         if (resultado.xmlNFSe) {
             const XMLExtractor = require('../utils/xmlExtractor');
@@ -380,6 +381,21 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
             }
         }
         
+        // 3. Baixa PDF em Base64 (para anexo de e-mail)
+        const incluirPDF = req.query.incluirPDF !== 'false'; // Padrão: true
+        let pdfResult = { sucesso: false };
+        
+        if (incluirPDF) {
+            pdfResult = await SefinResponseProcessor.baixarPDFBase64(
+                chaveAcesso,
+                cnpjEmpresa,
+                tipoAmbiente
+            );
+        }
+        
+        // 4. Monta URLs
+        const baseURL = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+        
         res.json({
             sucesso: true,
             nfse: {
@@ -388,9 +404,31 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
                 codigoVerificacao: resultado.codigoVerificacao,
                 dataEmissao: resultado.dataEmissao,
                 situacao: resultado.situacao,
-                linkConsulta: SefinResponseProcessor.montarLinkConsulta(chaveAcesso, tipoAmbiente),
-                // xmlNFSe: resultado.xmlNFSe,  // ✨ XML DESCOMPRIMIDO
-                dpsLimpa: dpsLimpa            // ✨ DPS SEM ASSINATURAS
+                
+                // 📄 PDF para anexo de e-mail (snapshot do momento da consulta)
+                pdfBase64: pdfResult.sucesso ? pdfResult.pdfBase64 : null,
+                pdfTamanhoKB: pdfResult.sucesso ? pdfResult.tamanhoKB : null,
+                pdfErro: !pdfResult.sucesso ? pdfResult.erro : null,
+                
+                // 🔗 Links oficiais SEFIN (sempre atualizados, mas precisam certificado)
+                linksOficiais: {
+                    consulta: SefinResponseProcessor.montarLinkConsulta(chaveAcesso, tipoAmbiente),
+                    pdf: SefinResponseProcessor.montarLinkPDF(chaveAcesso, tipoAmbiente),
+                    aviso: "⚠️ Requer certificado digital instalado no navegador"
+                },
+                
+                // 🔄 Links proxy pela sua API (usa certificado automaticamente)
+                linksProxy: {
+                    pdf: `${baseURL}/api/nfse/pdf/${chaveAcesso}`,
+                    aviso: "✅ Funciona em qualquer navegador (usa certificado da API)"
+                },
+                
+                // 📦 XMLs
+                // xmlNFSe: resultado.xmlNFSe,
+                dpsLimpa: dpsLimpa,
+                
+                // ⚠️ AVISO IMPORTANTE
+                avisoStatus: "⚠️ O status 'situacao' pode estar desatualizado se a nota foi cancelada após esta consulta. Use os links oficiais para verificar a situação atual."
             },
             // dadosCompletos: resultado.dadosCompletos
         });
@@ -400,6 +438,74 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
         next(error);
     }
 });
+
+/**
+ * GET /api/nfse/pdf/:chaveAcesso
+ * Download direto do PDF (para visualizar no navegador)
+ */
+router.get('/pdf/:chaveAcesso', async (req, res, next) => {
+    try {
+        const { chaveAcesso } = req.params;
+        const cnpjEmpresa = req.empresa.cnpj;
+        const tipoAmbiente = req.empresa.tipo_ambiente;
+        
+        if (!chaveAcesso || chaveAcesso.length < 44) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Chave de acesso inválida'
+            });
+        }
+        
+        const CertificadoService = require('../services/certificadoService');
+        const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
+        
+        const { privateKeyPem, certificatePem } = 
+            CertificadoService.extrairCertificadoPEM(
+                certInfo.certificadoBuffer,
+                certInfo.senha
+            );
+        
+        const https = require('https');
+        const axios = require('axios');
+        const httpsAgent = new https.Agent({
+            cert: certificatePem,
+            key: privateKeyPem,
+            rejectUnauthorized: tipoAmbiente === '1'
+        });
+        
+        const urlBase = tipoAmbiente === '1'
+            ? 'https://adn.producao.nfse.gov.br'
+            : 'https://adn.producaorestrita.nfse.gov.br';
+        
+        const urlPDF = `${urlBase}/danfse/${chaveAcesso}`;
+        
+        const response = await axios.get(urlPDF, {
+            httpsAgent: httpsAgent,
+            responseType: 'arraybuffer',
+            timeout: 30000
+        });
+        
+        // inline = visualiza no navegador | attachment = força download
+        const disposition = req.query.download === 'true' ? 'attachment' : 'inline';
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `${disposition}; filename="NFSe-${chaveAcesso}.pdf"`);
+        res.send(response.data);
+        
+    } catch (error) {
+        console.error('❌ Erro ao baixar PDF:', error.message);
+        
+        if (error.response?.status === 404) {
+            return res.status(404).json({
+                sucesso: false,
+                erro: 'PDF não encontrado'
+            });
+        }
+        
+        next(error);
+    }
+});
+
 /**
  * GET /api/nfse/consultar/:idDPS
  */
