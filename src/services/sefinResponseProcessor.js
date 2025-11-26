@@ -42,7 +42,6 @@ class SefinResponseProcessor {
                 protocolo: null,
                 chaveAcesso: null,
                 numeroNFSe: null,
-                codigoVerificacao: null,
                 linkConsulta: null,
                 dataEmissao: null,
                 situacao: null,
@@ -135,7 +134,6 @@ class SefinResponseProcessor {
 
             if (dadosNFSeResult.sucesso) {
                 resultado.numeroNFSe = dadosNFSeResult.numeroNFSe;
-                resultado.codigoVerificacao = dadosNFSeResult.codigoVerificacao;
                 resultado.dataEmissao = dadosNFSeResult.dataEmissao;
                 resultado.situacao = dadosNFSeResult.situacao;
                 resultado.dadosCompletos = dadosNFSeResult.dadosCompletos;
@@ -197,18 +195,17 @@ class SefinResponseProcessor {
 /**
  * Consulta dados completos da NFS-e autorizada
  */
+/**
+ * Consulta dados completos da NFS-e autorizada
+ */
 static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
     try {
         console.log(`   → Consultando NFS-e...`);
 
+        // ... (código de certificado e httpsAgent mantém igual) ...
         const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
+        const { privateKeyPem, certificatePem } = CertificadoService.extrairCertificadoPEM(certInfo.certificadoBuffer, certInfo.senha);
         
-        const { privateKeyPem, certificatePem } = 
-            CertificadoService.extrairCertificadoPEM(
-                certInfo.certificadoBuffer,
-                certInfo.senha
-            );
-
         const httpsAgent = new https.Agent({
             cert: certificatePem,
             key: privateKeyPem,
@@ -230,21 +227,45 @@ static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
         const dados = response.data;
         console.log('   ✓ Dados recebidos da SEFIN');
 
-        // 🔧 DESCOMPRIME O XML
+        // DESCOMPRIME O XML
         let xmlNFSe = null;
         if (dados.nfseXmlGZipB64) {
             console.log('   → Descomprimindo XML da NFS-e...');
             xmlNFSe = this.decodificarEDescomprimir(dados.nfseXmlGZipB64);
-            console.log('   ✓ XML descomprimido!');
         }
+
+        // --- CORREÇÃO: EXTRAÇÃO DE DADOS DO XML (FALLBACK) ---
+        // A API às vezes retorna nulos, então extraímos do XML se disponível
+        let numeroNFSe = dados.numero || dados.numeroNFSe || null;
+        let codigoVerificacao = dados.codigoVerificacao || dados.codVerificacao || null;
+
+        if (xmlNFSe) {
+            // 1. Força busca do Número da Nota (<nNFSe>)
+            if (!numeroNFSe) {
+                const matchNum = xmlNFSe.match(/<nNFSe>(.*?)<\/nNFSe>/);
+                if (matchNum) {
+                    numeroNFSe = matchNum[1];
+                    console.log(`   ✓ Número NFS-e recuperado do XML: ${numeroNFSe}`);
+                }
+            }
+
+            // 2. Tenta busca do Código de Verificação (opcional, pois pode não existir)
+            if (!codigoVerificacao) {
+                const matchCod = xmlNFSe.match(/<(?:codVerificacao|codVerif|cVerif)>(.*?)<\/(?:codVerificacao|codVerif|cVerif)>/);
+                if (matchCod) {
+                    codigoVerificacao = matchCod[1];
+                }
+            }
+        }
+        // -----------------------------------------------------
 
         const resultado = {
             sucesso: true,
-            numeroNFSe: dados.numero || dados.numeroNFSe || null,
-            codigoVerificacao: dados.codigoVerificacao || dados.codVerificacao || null,
+            numeroNFSe: numeroNFSe, // Agora preenchido pelo Regex
+            codigoVerificacao: codigoVerificacao, // Pode ser null se não existir no XML
             dataEmissao: dados.dataEmissao || dados.dhEmi || dados.dataHoraProcessamento || null,
             situacao: dados.situacao || 'Autorizada',
-            xmlNFSe: xmlNFSe,  // ✨ XML descomprimido
+            xmlNFSe: xmlNFSe,
             nfseXmlGZipB64: dados.nfseXmlGZipB64,
             dadosCompletos: dados
         };
@@ -252,8 +273,8 @@ static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
         return resultado;
 
     } catch (error) {
+        // ... (tratamento de erro mantém igual) ...
         console.error('   ✗ Erro ao consultar NFS-e:', error.message);
-        
         if (error.response?.status === 404) {
             return { sucesso: false, erro: 'NFS-e ainda não disponível para consulta' };
         }
@@ -406,7 +427,6 @@ static montarLinkPDF(chaveAcesso, tipoAmbiente) {
             const params = [
                 dadosNFSe.chaveAcesso,
                 dadosNFSe.numeroNFSe,
-                dadosNFSe.codigoVerificacao,
                 dadosNFSe.linkConsulta,
                 dadosNFSe.dataEmissao,
                 dadosNFSe.situacao,

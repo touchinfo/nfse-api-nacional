@@ -244,7 +244,6 @@ router.post('/emitir',
                 nfse: {
                     chaveAcesso: dadosNFSe.chaveAcesso,
                     numeroNFSe: dadosNFSe.numeroNFSe,
-                    codigoVerificacao: dadosNFSe.codigoVerificacao,
                     linkConsulta: dadosNFSe.linkConsulta,
                     dataEmissao: dadosNFSe.dataEmissao,
                     situacao: dadosNFSe.situacao,
@@ -401,7 +400,6 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
             nfse: {
                 chaveAcesso: chaveAcesso,
                 numeroNFSe: resultado.numeroNFSe,
-                codigoVerificacao: resultado.codigoVerificacao,
                 dataEmissao: resultado.dataEmissao,
                 situacao: resultado.situacao,
                 
@@ -537,7 +535,6 @@ router.get('/consultar/:idDPS', async (req, res, next) => {
                 nfse: {
                     chaveAcesso: transmissao.chave_acesso_nfse,
                     numeroNFSe: transmissao.numero_nfse,
-                    codigoVerificacao: transmissao.codigo_verificacao,
                     linkConsulta: transmissao.link_consulta,
                     dataEmissao: transmissao.data_emissao_nfse,
                     situacao: transmissao.situacao_nfse
