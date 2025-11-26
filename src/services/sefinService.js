@@ -252,6 +252,73 @@ class SefinService {
         await query(sql, [numeroDPS, empresaId, numeroDPS]);
     }
 
+        /**
+     * Consulta NFS-e completa pela chave
+     */
+    static async consultarNFSeCompleta(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
+        try {
+            // Busca certificado
+            const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
+            
+            const { privateKeyPem, certificatePem } = 
+                CertificadoService.extrairCertificadoPEM(
+                    certInfo.certificadoBuffer,
+                    certInfo.senha
+                );
+
+            // HTTPS Agent com mTLS
+            const https = require('https');
+            const httpsAgent = new https.Agent({
+                cert: certificatePem,
+                key: privateKeyPem,
+                rejectUnauthorized: tipoAmbiente === '1'
+            });
+
+            // URL CORRETA
+            const urlBase = tipoAmbiente === '1'
+                ? 'https://sefin.producao.nfse.gov.br'
+                : 'https://sefin.producaorestrita.nfse.gov.br';
+
+            const urlCompleta = `${urlBase}/SefinNacional/nfse/${chaveAcesso}`;
+
+            console.log(`Consultando: ${urlCompleta}`);
+
+            // Faz requisição
+            const axios = require('axios');
+            const response = await axios.get(urlCompleta, {
+                headers: { 'Accept': 'application/json' },
+                httpsAgent: httpsAgent,
+                timeout: 30000
+            });
+
+            const dados = response.data;
+
+            // Descomprime o XML se existir
+            let xmlNFSe = null;
+            if (dados.nfseXmlGZipB64) {
+                console.log('Descomprimindo XML...');
+                xmlNFSe = this.decodificarEDescomprimir(dados.nfseXmlGZipB64);
+                console.log('XML descomprimido com sucesso!');
+            }
+
+            return {
+                sucesso: true,
+                numeroNFSe: dados.numero || dados.numeroNFSe,
+                codigoVerificacao: dados.codigoVerificacao,
+                dataEmissao: dados.dataEmissao,
+                situacao: dados.situacao || 'Autorizada',
+                xmlNFSe: xmlNFSe  // ✨ XML descomprimido
+            };
+
+        } catch (error) {
+            console.error('Erro ao consultar NFS-e:', error.message);
+            return {
+                sucesso: false,
+                erro: error.message
+            };
+        }
+    }
+
     /**
      * Consulta status de uma transmissão
      */

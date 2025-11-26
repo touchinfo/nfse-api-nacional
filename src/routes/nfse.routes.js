@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query: queryValidator, validationResult } = require('express-validator');
 const XMLService = require('../services/xmlService');
 const SefinService = require('../services/sefinService');
+const SefinResponseProcessor = require('../services/sefinResponseProcessor');
 const { query } = require('../config/database');
 
 const router = express.Router();
@@ -23,14 +24,12 @@ function validarErros(req, res, next) {
 
 /**
  * GET /api/nfse/parametros-convenio/:codigoMunicipio
- * Consulta os parâmetros de convênio de um município
  */
 router.get('/parametros-convenio/:codigoMunicipio', async (req, res, next) => {
     try {
         const { codigoMunicipio } = req.params;
         const cnpjEmpresa = req.empresa.cnpj;
         
-        // Validação do código do município (7 dígitos IBGE)
         if (!codigoMunicipio || codigoMunicipio.length !== 7) {
             return res.status(400).json({
                 sucesso: false,
@@ -40,10 +39,8 @@ router.get('/parametros-convenio/:codigoMunicipio', async (req, res, next) => {
         
         console.log(`📋 Consultando parâmetros de convênio - Município: ${codigoMunicipio}`);
         
-        // Define ambiente (usa da empresa)
         const tipoAmbiente = req.empresa.tipo_ambiente;
         
-        // Consulta parâmetros na ADN
         const resultado = await SefinService.consultarParametrosConvenio(
             codigoMunicipio,
             cnpjEmpresa,
@@ -78,7 +75,7 @@ router.get('/parametros-convenio/:codigoMunicipio', async (req, res, next) => {
 
 /**
  * POST /api/nfse/emitir
- * Emite uma NFS-e processando o XML enviado
+ * COM TRATAMENTO DE DUPLICIDADE E MENSAGEM CLARA
  */
 router.post('/emitir',
     [
@@ -98,13 +95,11 @@ router.post('/emitir',
             console.log(`📝 NOVA EMISSÃO - Empresa: ${req.empresa.razao_social}`);
             console.log('='.repeat(70));
             
-            // Processa o XML (valida, assina, comprime)
+            // 1. Processa o XML
             const resultado = await XMLService.processarXML(xml, cnpjEmpresa);
-            
-            // Define ambiente (usa da empresa se não especificado)
             const ambienteEnvio = tipoAmbiente || req.empresa.tipo_ambiente;
             
-            // Envia para SEFIN
+            // 2. Envia para SEFIN
             const respostaSefin = await SefinService.enviarDPS(
                 resultado.dpsXmlGZipB64,
                 cnpjEmpresa,
@@ -112,11 +107,9 @@ router.post('/emitir',
             );
             
             const tempoTotal = Date.now() - inicioProcessamento;
-            
-            // Determina status
             const statusEnvio = respostaSefin.sucesso ? 'sucesso' : 'erro';
             
-            // Registra transmissão
+            // 3. Registra transmissão inicial
             const transmissaoId = await SefinService.registrarTransmissao({
                 empresaId,
                 idDPS: resultado.infoDPS.idDPS,
@@ -136,74 +129,153 @@ router.post('/emitir',
                 tempoProcessamento: tempoTotal
             });
             
-            // Atualiza último número DPS se sucesso
-            if (respostaSefin.sucesso && resultado.infoDPS.numeroDPS) {
-                await SefinService.atualizarUltimoNumeroDPS(
-                    empresaId,
-                    parseInt(resultado.infoDPS.numeroDPS)
+            // =============================================
+            // 4. VERIFICAÇÃO DE DUPLICIDADE (E0014)
+            // =============================================
+            let ehDuplicidadeRecuperavel = false;
+            
+            if (!respostaSefin.sucesso && respostaSefin.dados?.erros) {
+                const erroE0014 = respostaSefin.dados.erros.find(e => 
+                    e.Codigo === 'E0014' || e.Codigo === 'E174' || 
+                    (e.Descricao && e.Descricao.includes('já existe'))
                 );
+                
+                if (erroE0014) {
+                    console.log('⚠️ Erro de Duplicidade detectado! Tentando recuperar nota existente...');
+                    ehDuplicidadeRecuperavel = true;
+                }
+            }
+
+            // =============================================
+            // 5. PROCESSAMENTO OU RECUPERAÇÃO
+            // =============================================
+            let dadosNFSe = null;
+            let mensagemUsuario = ''; // Variável para controlar a mensagem final
+            
+            if (respostaSefin.sucesso || ehDuplicidadeRecuperavel) {
+                console.log('\n🔍 Processando resposta completa (ou recuperando duplicidade)...');
+                
+                if (ehDuplicidadeRecuperavel) {
+                    // --- MODO RECUPERAÇÃO ---
+                    console.log('🔧 Iniciando recuperação de nota duplicada...');
+                    
+                    // Busca a chave usando o ID da DPS
+                    const consultaChave = await SefinResponseProcessor.consultarChaveAcesso(
+                        resultado.infoDPS.idDPS,
+                        cnpjEmpresa,
+                        ambienteEnvio
+                    );
+                    
+                    if (consultaChave.sucesso && consultaChave.chaveAcesso) {
+                        // Simula sucesso para o processador
+                        dadosNFSe = await SefinResponseProcessor.processarRespostaCompleta(
+                            {
+                                sucesso: true,
+                                dados: {
+                                    chaveAcesso: consultaChave.chaveAcesso,
+                                    codigo: '100', 
+                                    mensagem: 'Nota recuperada de duplicidade'
+                                }
+                            },
+                            resultado.infoDPS,
+                            cnpjEmpresa,
+                            ambienteEnvio
+                        );
+
+                        // --- AQUI ESTÁ A CORREÇÃO DA MENSAGEM ---
+                        mensagemUsuario = 'Nota Fiscal já constava na base de dados (Recuperada com sucesso)';
+                        
+                    } else {
+                        dadosNFSe = { 
+                            sucesso: false, 
+                            mensagem: 'Erro de duplicidade: Nota existe mas não foi possível recuperar a chave.' 
+                        };
+                        mensagemUsuario = dadosNFSe.mensagem;
+                    }
+                } else {
+                    // --- MODO NORMAL (PRIMEIRA EMISSÃO) ---
+                    dadosNFSe = await SefinResponseProcessor.processarRespostaCompleta(
+                        respostaSefin,
+                        resultado.infoDPS,
+                        cnpjEmpresa,
+                        ambienteEnvio
+                    );
+                    
+                    mensagemUsuario = dadosNFSe.mensagem || 'NFS-e emitida com sucesso';
+                }
+                
+                // Atualiza banco se teve sucesso
+                if (dadosNFSe && dadosNFSe.sucesso && dadosNFSe.chaveAcesso) {
+                    await SefinResponseProcessor.atualizarTransmissaoComDadosNFSe(
+                        transmissaoId,
+                        dadosNFSe
+                    );
+                    
+                    if (resultado.infoDPS.numeroDPS) {
+                        await SefinService.atualizarUltimoNumeroDPS(
+                            empresaId,
+                            parseInt(resultado.infoDPS.numeroDPS)
+                        );
+                    }
+                }
+            } else {
+                // Erro real
+                dadosNFSe = {
+                    sucesso: false,
+                    mensagem: respostaSefin.dados?.mensagem || 'Erro no envio',
+                    erros: respostaSefin.dados?.erros || []
+                };
+                mensagemUsuario = dadosNFSe.mensagem;
             }
             
             console.log('='.repeat(70));
-            console.log(`✅ EMISSÃO CONCLUÍDA - Tempo: ${tempoTotal}ms`);
+            console.log(`✅ PROCESSO CONCLUÍDO - Tempo: ${tempoTotal}ms`);
             console.log('='.repeat(70) + '\n');
             
-            // Resposta
-            res.status(respostaSefin.sucesso ? 200 : 400).json({
-                sucesso: respostaSefin.sucesso,
+            // Resposta final
+            res.status(dadosNFSe.sucesso ? 200 : 400).json({
+                sucesso: dadosNFSe.sucesso,
                 transmissaoId,
                 dps: {
                     idDPS: resultado.infoDPS.idDPS,
                     numeroDPS: resultado.infoDPS.numeroDPS,
                     serieDPS: resultado.infoDPS.serieDPS
                 },
+                nfse: {
+                    chaveAcesso: dadosNFSe.chaveAcesso,
+                    numeroNFSe: dadosNFSe.numeroNFSe,
+                    codigoVerificacao: dadosNFSe.codigoVerificacao,
+                    linkConsulta: dadosNFSe.linkConsulta,
+                    dataEmissao: dadosNFSe.dataEmissao,
+                    situacao: dadosNFSe.situacao,
+                    xmlNFSe: dadosNFSe.xmlNFSe
+                },
                 sefin: {
-                    status: respostaSefin.status,
-                    protocolo: respostaSefin.dados?.protocolo,
-                    mensagem: respostaSefin.dados?.mensagem,
-                    erros: respostaSefin.dados?.erros || null
+                    protocolo: dadosNFSe.protocolo,
+                    mensagem: mensagemUsuario, // ✨ Mensagem customizada aqui
+                    erros: dadosNFSe.erros || null
                 },
                 processamento: {
                     tempoTotal: `${tempoTotal}ms`,
                     ambiente: ambienteEnvio === '1' ? 'Produção' : 'Homologação'
                 },
-                validacao: resultado.validacao, // ← NOVO: Informações de validação
-                // Dados completos em desenvolvimento
-                ...(process.env.NODE_ENV !== 'production' && {
-                    debug: {
-                        xmlAssinado: resultado.xmlAssinado,
-                        dpsBase64: resultado.dpsXmlGZipB64,
-                        respostaCompletaSefin: respostaSefin.dados
-                    }
-                })
+                recuperadoDeDuplicidade: ehDuplicidadeRecuperavel
             });
             
         } catch (error) {
             console.error('❌ Erro na emissão:', error.message);
-            
-            // ============================================
-            // TRATAMENTO ESPECIAL PARA ERROS DE VALIDAÇÃO XSD
-            // ============================================
             try {
                 const errorObj = JSON.parse(error.message);
                 if (errorObj.tipo === 'VALIDACAO_XSD') {
-                    console.log('  ⚠️  Erro de validação XSD detectado');
-                    console.log(`  ⚠️  Total de erros: ${errorObj.totalErros}`);
-                    
                     return res.status(422).json({
                         sucesso: false,
                         tipo: 'validacao_xsd',
                         mensagem: errorObj.mensagem,
                         erros: errorObj.erros,
-                        totalErros: errorObj.totalErros,
-                        ajuda: 'Corrija os erros no XML antes de enviar novamente',
-                        documentacao: '/api/docs'
+                        totalErros: errorObj.totalErros
                     });
                 }
-            } catch (e) {
-                // Não é um erro de validação XSD estruturado
-                // Continua para o handler geral de erros
-            }
+            } catch (e) {}
             
             next(error);
         }
@@ -212,7 +284,6 @@ router.post('/emitir',
 
 /**
  * POST /api/nfse/validar
- * Valida o XML sem enviar para SEFIN
  */
 router.post('/validar',
     [
@@ -226,7 +297,6 @@ router.post('/validar',
             
             console.log(`📋 Validando XML - Empresa: ${req.empresa.razao_social}`);
             
-            // Processa o XML sem enviar
             const resultado = await XMLService.processarXML(xml, cnpjEmpresa);
             
             res.json({
@@ -239,7 +309,7 @@ router.post('/validar',
                     cnpjPrestador: resultado.infoDPS.cnpjPrestador,
                     cnpjTomador: resultado.infoDPS.cnpjTomador
                 },
-                validacao: resultado.validacao, // ← NOVO: Informações de validação
+                validacao: resultado.validacao,
                 debug: {
                     xmlAssinado: resultado.xmlAssinado,
                     tamanhoBase64: resultado.dpsXmlGZipB64.length
@@ -248,79 +318,121 @@ router.post('/validar',
             
         } catch (error) {
             console.error('❌ Erro na validação:', error.message);
-            
-            // ============================================
-            // TRATAMENTO ESPECIAL PARA ERROS DE VALIDAÇÃO XSD
-            // ============================================
             try {
                 const errorObj = JSON.parse(error.message);
                 if (errorObj.tipo === 'VALIDACAO_XSD') {
-                    console.log('  ⚠️  Erro de validação XSD detectado');
-                    console.log(`  ⚠️  Total de erros: ${errorObj.totalErros}`);
-                    
                     return res.status(422).json({
                         sucesso: false,
                         tipo: 'validacao_xsd',
                         mensagem: errorObj.mensagem,
                         erros: errorObj.erros,
-                        totalErros: errorObj.totalErros,
-                        ajuda: 'Corrija os erros no XML antes de enviar novamente',
-                        documentacao: '/api/docs'
+                        totalErros: errorObj.totalErros
                     });
                 }
-            } catch (e) {
-                // Não é um erro de validação XSD estruturado
-                // Continua para o handler geral de erros
-            }
-            
+            } catch (e) {}
             next(error);
         }
     }
 );
+
+/**
+ * GET /api/nfse/consultar-por-chave/:chaveAcesso
+ */
+router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
+    try {
+        const { chaveAcesso } = req.params;
+        const cnpjEmpresa = req.empresa.cnpj;
+        const tipoAmbiente = req.empresa.tipo_ambiente;
+        
+        console.log(`🔍 Consultando NFS-e por chave: ${chaveAcesso.substring(0, 20)}...`);
+        
+        if (!chaveAcesso || chaveAcesso.length !== 44) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Chave de acesso inválida (deve ter 44 caracteres)'
+            });
+        }
+        
+        const resultado = await SefinResponseProcessor.consultarDadosNFSe(
+            chaveAcesso,
+            cnpjEmpresa,
+            tipoAmbiente
+        );
+        
+        if (!resultado.sucesso) {
+            return res.status(404).json({
+                sucesso: false,
+                erro: 'NFS-e não encontrada',
+                detalhes: resultado.erro
+            });
+        }
+        
+        res.json({
+            sucesso: true,
+            nfse: {
+                chaveAcesso: chaveAcesso,
+                numeroNFSe: resultado.numeroNFSe,
+                codigoVerificacao: resultado.codigoVerificacao,
+                dataEmissao: resultado.dataEmissao,
+                situacao: resultado.situacao,
+                linkConsulta: SefinResponseProcessor.montarLinkConsulta(chaveAcesso, tipoAmbiente)
+            },
+            dadosCompletos: resultado.dadosCompletos
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao consultar NFS-e:', error.message);
+        next(error);
+    }
+});
 
 /**
  * GET /api/nfse/consultar/:idDPS
- * Consulta uma transmissão pelo ID da DPS
  */
-router.get('/consultar/:idDPS',
-    async (req, res, next) => {
-        try {
-            const { idDPS } = req.params;
-            const cnpjEmpresa = req.empresa.cnpj;
-            
-            const transmissao = await SefinService.consultarTransmissao(idDPS, cnpjEmpresa);
-            
-            if (!transmissao) {
-                return res.status(404).json({
-                    sucesso: false,
-                    erro: 'Transmissão não encontrada'
-                });
-            }
-            
-            res.json({
-                sucesso: true,
-                transmissao: {
-                    id: transmissao.id,
-                    idDPS: transmissao.id_dps,
-                    numeroDPS: transmissao.numero_dps,
-                    serieDPS: transmissao.serie_dps,
-                    status: transmissao.status_envio,
-                    protocolo: transmissao.numero_protocolo,
-                    dataEnvio: transmissao.created_at,
-                    dataRecebimento: transmissao.data_recebimento,
-                    resposta: transmissao.resposta_completa
-                }
+router.get('/consultar/:idDPS', async (req, res, next) => {
+    try {
+        const { idDPS } = req.params;
+        const cnpjEmpresa = req.empresa.cnpj;
+        
+        const transmissao = await SefinService.consultarTransmissao(idDPS, cnpjEmpresa);
+        
+        if (!transmissao) {
+            return res.status(404).json({
+                sucesso: false,
+                erro: 'Transmissão não encontrada'
             });
-            
-        } catch (error) {
-            next(error);
         }
+        
+        res.json({
+            sucesso: true,
+            transmissao: {
+                id: transmissao.id,
+                idDPS: transmissao.id_dps,
+                numeroDPS: transmissao.numero_dps,
+                serieDPS: transmissao.serie_dps,
+                status: transmissao.status_envio,
+                protocolo: transmissao.numero_protocolo,
+                dataEnvio: transmissao.created_at,
+                dataRecebimento: transmissao.data_recebimento,
+                nfse: {
+                    chaveAcesso: transmissao.chave_acesso_nfse,
+                    numeroNFSe: transmissao.numero_nfse,
+                    codigoVerificacao: transmissao.codigo_verificacao,
+                    linkConsulta: transmissao.link_consulta,
+                    dataEmissao: transmissao.data_emissao_nfse,
+                    situacao: transmissao.situacao_nfse
+                },
+                resposta: transmissao.resposta_completa
+            }
+        });
+        
+    } catch (error) {
+        next(error);
     }
-);
+});
 
 /**
  * GET /api/nfse/listar
- * Lista transmissões com paginação
  */
 router.get('/listar',
     [
@@ -353,7 +465,6 @@ router.get('/listar',
 
 /**
  * GET /api/nfse/status
- * Status da empresa e última numeração
  */
 router.get('/status', async (req, res, next) => {
     try {

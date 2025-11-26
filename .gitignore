@@ -1,5 +1,7 @@
 # Dependências
 node_modules/
 
+logs/
+
 # Arquivos de ambiente (senhas, chaves de API)
 .env
