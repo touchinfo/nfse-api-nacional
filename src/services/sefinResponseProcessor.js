@@ -194,48 +194,72 @@ class SefinResponseProcessor {
         }
     }
 
-    static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
-        try {
-            console.log(`   → Consultando NFS-e...`);
-            const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
-            const { privateKeyPem, certificatePem } = CertificadoService.extrairCertificadoPEM(certInfo.certificadoBuffer, certInfo.senha);
+/**
+ * Consulta dados completos da NFS-e autorizada
+ */
+static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
+    try {
+        console.log(`   → Consultando NFS-e...`);
 
-            const httpsAgent = new https.Agent({
-                cert: certificatePem,
-                key: privateKeyPem,
-                rejectUnauthorized: tipoAmbiente === '1'
-            });
+        const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
+        
+        const { privateKeyPem, certificatePem } = 
+            CertificadoService.extrairCertificadoPEM(
+                certInfo.certificadoBuffer,
+                certInfo.senha
+            );
 
-            const urlSefin = tipoAmbiente === '1' ? 'https://sefin.producao.nfse.gov.br' : 'https://sefin.producaorestrita.nfse.gov.br';
-            const urlCompleta = `${urlSefin}/SefinNacional/nfse/${chaveAcesso}`;
+        const httpsAgent = new https.Agent({
+            cert: certificatePem,
+            key: privateKeyPem,
+            rejectUnauthorized: tipoAmbiente === '1'
+        });
 
-            const response = await axios.get(urlCompleta, {
-                headers: { 'Accept': 'application/json' },
-                httpsAgent: httpsAgent,
-                timeout: 30000
-            });
+        const urlSefin = tipoAmbiente === '1'
+            ? 'https://sefin.producao.nfse.gov.br'
+            : 'https://sefin.producaorestrita.nfse.gov.br';
 
-            const dados = response.data;
-            console.log('   ✓ Dados recebidos da SEFIN');
+        const urlCompleta = `${urlSefin}/SefinNacional/nfse/${chaveAcesso}`;
 
-            return {
-                sucesso: true,
-                numeroNFSe: dados.numero || dados.numeroNFSe || null,
-                codigoVerificacao: dados.codigoVerificacao || dados.codVerificacao || null,
-                dataEmissao: dados.dataEmissao || dados.dhEmi || dados.dataHoraProcessamento || null,
-                situacao: dados.situacao || 'Autorizada',
-                nfseXmlGZipB64: dados.nfseXmlGZipB64 || null,
-                dadosCompletos: dados
-            };
+        const response = await axios.get(urlCompleta, {
+            headers: { 'Accept': 'application/json' },
+            httpsAgent: httpsAgent,
+            timeout: 30000
+        });
 
-        } catch (error) {
-            console.error('   ✗ Erro ao consultar NFS-e:', error.message);
-            if (error.response?.status === 404) {
-                return { sucesso: false, erro: 'NFS-e ainda não disponível' };
-            }
-            return { sucesso: false, erro: error.message };
+        const dados = response.data;
+        console.log('   ✓ Dados recebidos da SEFIN');
+
+        // 🔧 DESCOMPRIME O XML
+        let xmlNFSe = null;
+        if (dados.nfseXmlGZipB64) {
+            console.log('   → Descomprimindo XML da NFS-e...');
+            xmlNFSe = this.decodificarEDescomprimir(dados.nfseXmlGZipB64);
+            console.log('   ✓ XML descomprimido!');
         }
+
+        const resultado = {
+            sucesso: true,
+            numeroNFSe: dados.numero || dados.numeroNFSe || null,
+            codigoVerificacao: dados.codigoVerificacao || dados.codVerificacao || null,
+            dataEmissao: dados.dataEmissao || dados.dhEmi || dados.dataHoraProcessamento || null,
+            situacao: dados.situacao || 'Autorizada',
+            xmlNFSe: xmlNFSe,  // ✨ XML descomprimido
+            nfseXmlGZipB64: dados.nfseXmlGZipB64,
+            dadosCompletos: dados
+        };
+
+        return resultado;
+
+    } catch (error) {
+        console.error('   ✗ Erro ao consultar NFS-e:', error.message);
+        
+        if (error.response?.status === 404) {
+            return { sucesso: false, erro: 'NFS-e ainda não disponível para consulta' };
+        }
+        return { sucesso: false, erro: error.message };
     }
+}
 
     static async consultarChaveAcesso(idDPS, cnpjEmpresa, tipoAmbiente) {
         try {

@@ -347,13 +347,14 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
         
         console.log(`🔍 Consultando NFS-e por chave: ${chaveAcesso.substring(0, 20)}...`);
         
-        if (!chaveAcesso || chaveAcesso.length !== 44) {
+        if (!chaveAcesso || chaveAcesso.length < 44) {
             return res.status(400).json({
                 sucesso: false,
-                erro: 'Chave de acesso inválida (deve ter 44 caracteres)'
+                erro: 'Chave de acesso inválida'
             });
         }
         
+        // 🔧 USA O MÉTODO QUE DESCOMPRIME
         const resultado = await SefinResponseProcessor.consultarDadosNFSe(
             chaveAcesso,
             cnpjEmpresa,
@@ -368,6 +369,17 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
             });
         }
         
+        // 🔧 EXTRAI DPS LIMPA DO XML DESCOMPRIMIDO
+        let dpsLimpa = null;
+        if (resultado.xmlNFSe) {
+            const XMLExtractor = require('../utils/xmlExtractor');
+            try {
+                dpsLimpa = XMLExtractor.extrairDPSLimpa(resultado.xmlNFSe);
+            } catch (error) {
+                console.warn('Erro ao extrair DPS limpa:', error.message);
+            }
+        }
+        
         res.json({
             sucesso: true,
             nfse: {
@@ -376,9 +388,11 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
                 codigoVerificacao: resultado.codigoVerificacao,
                 dataEmissao: resultado.dataEmissao,
                 situacao: resultado.situacao,
-                linkConsulta: SefinResponseProcessor.montarLinkConsulta(chaveAcesso, tipoAmbiente)
+                linkConsulta: SefinResponseProcessor.montarLinkConsulta(chaveAcesso, tipoAmbiente),
+                // xmlNFSe: resultado.xmlNFSe,  // ✨ XML DESCOMPRIMIDO
+                dpsLimpa: dpsLimpa            // ✨ DPS SEM ASSINATURAS
             },
-            dadosCompletos: resultado.dadosCompletos
+            // dadosCompletos: resultado.dadosCompletos
         });
         
     } catch (error) {
@@ -386,7 +400,6 @@ router.get('/consultar-por-chave/:chaveAcesso', async (req, res, next) => {
         next(error);
     }
 });
-
 /**
  * GET /api/nfse/consultar/:idDPS
  */
