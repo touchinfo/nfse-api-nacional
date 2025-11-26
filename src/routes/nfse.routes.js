@@ -248,7 +248,7 @@ router.post('/emitir',
                     linkConsulta: dadosNFSe.linkConsulta,
                     dataEmissao: dadosNFSe.dataEmissao,
                     situacao: dadosNFSe.situacao,
-                    // xmlNFSe: dadosNFSe.xmlNFSe,
+                    xmlNFSe: dadosNFSe.xmlNFSe,
                     dpsLimpa: dadosNFSe.dpsLimpa 
                 },
                 sefin: {
