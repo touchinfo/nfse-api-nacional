@@ -13,9 +13,7 @@ const upload = multer({
     limits: {
         fileSize: 5 * 1024 * 1024 // 5MB max
     },
-    // A CORREÇÃO ESTÁ AQUI: Adicione 'req' como primeiro argumento
     fileFilter: (req, file, cb) => {
-        // Verificação de segurança adicional usando Optional Chaining (?.)
         if (file.mimetype === 'application/x-pkcs12' || 
             file.originalname?.endsWith('.pfx') || 
             file.originalname?.endsWith('.p12')) {
@@ -95,7 +93,8 @@ function validarCertificado(certificadoBuffer, senha) {
 
 /**
  * POST /api/admin/cadastrar-empresa
- * Cadastra uma nova empresa com certificado digital
+ * Cadastra uma nova empresa (certificado é OPCIONAL)
+ * Cliente pode subir o certificado depois via /api/nfse/certificado
  */
 router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res, next) => {
     try {
@@ -110,22 +109,14 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             });
         }
         
-        // Valida se certificado foi enviado
-        if (!req.file) {
-            return res.status(400).json({
-                sucesso: false,
-                erro: 'Certificado digital (.pfx ou .p12) não foi enviado'
-            });
-        }
-        
-        // Extrai dados do body (usando nomes originais: cnpj, cep)
+        // Extrai dados do body
         const {
-            cnpj, // CNPJ com pontuação (ex: 00.000.000/0000-00)
+            cnpj,
             razao_social,
             nome_fantasia,
             inscricao_municipal,
             codigo_municipio,
-            cep, // CEP com pontuação (ex: 00000-000)
+            cep,
             logradouro,
             numero,
             complemento,
@@ -140,15 +131,14 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             versao_aplicacao
         } = req.body;
 
-
         const rawCnpj = cnpj ? cnpj.replace(/\D/g, '') : null;
         const rawCep = cep ? cep.replace(/\D/g, '') : null; 
 
-        // Validações básicas (usando rawCnpj)
+        // Validações básicas
         if (!rawCnpj || rawCnpj.length !== 14) {
             return res.status(400).json({
                 sucesso: false,
-                erro: 'CNPJ inválido (deve ter 14 dígitos sem pontuação)'
+                erro: 'CNPJ inválido (deve ter 14 dígitos)'
             });
         }
         
@@ -159,19 +149,12 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             });
         }
         
-        if (!senha_certificado) {
-            return res.status(400).json({
-                sucesso: false,
-                erro: 'Senha do certificado é obrigatória'
-            });
-        }
-        
-        console.log(`  → CNPJ: ${cnpj}`);
+        console.log(`  → CNPJ: ${rawCnpj}`);
         console.log(`  → Razão Social: ${razao_social}`);
         
         // Verifica se empresa já existe
         const sqlVerifica = 'SELECT cnpj FROM empresas WHERE cnpj = ?';
-        const empresasExistentes = await query(sqlVerifica, [cnpj]);
+        const empresasExistentes = await query(sqlVerifica, [rawCnpj]);
         
         if (empresasExistentes.length > 0) {
             return res.status(400).json({
@@ -181,32 +164,38 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             });
         }
         
-        // Valida certificado
-        console.log('  → Validando certificado digital...');
-        const certInfo = validarCertificado(req.file.buffer, senha_certificado);
+        // Variáveis para certificado (opcional)
+        let certInfo = null;
+        let senhaEncrypted = null;
+        let certificadoBuffer = null;
         
-        if (!certInfo.valido) {
-            return res.status(400).json({
-                sucesso: false,
-                erro: 'Certificado inválido ou senha incorreta',
-                detalhes: certInfo.erro
-            });
+        // Se enviou certificado, valida
+        if (req.file && senha_certificado) {
+            console.log('  → Validando certificado digital...');
+            certInfo = validarCertificado(req.file.buffer, senha_certificado);
+            
+            if (!certInfo.valido) {
+                return res.status(400).json({
+                    sucesso: false,
+                    erro: 'Certificado inválido ou senha incorreta',
+                    detalhes: certInfo.erro
+                });
+            }
+            
+            console.log(`  → Certificado válido!`);
+            console.log(`     Titular: ${certInfo.titular}`);
+            console.log(`     Validade: ${certInfo.validadeFim.toLocaleDateString()}`);
+            
+            // Aviso se CNPJ do certificado é diferente
+            if (certInfo.cnpj && certInfo.cnpj !== rawCnpj) {
+                console.warn(`  ⚠️  AVISO: CNPJ do certificado (${certInfo.cnpj}) diferente do informado (${rawCnpj})`);
+            }
+            
+            senhaEncrypted = encryptSenha(senha_certificado);
+            certificadoBuffer = req.file.buffer;
+        } else {
+            console.log('  → Cadastro SEM certificado (cliente vai subir depois)');
         }
-        
-        console.log(`  → Certificado válido!`);
-        console.log(`     Titular: ${certInfo.titular}`);
-        console.log(`     CNPJ Cert: ${certInfo.cnpj}`);
-        console.log(`     Validade: ${certInfo.validadeFim.toLocaleDateString()}`);
-        console.log(`     Dias restantes: ${certInfo.diasRestantes}`);
-        
-        // Aviso se CNPJ do certificado é diferente
-        if (certInfo.cnpj && certInfo.cnpj !== cnpj) {
-            console.warn(`  ⚠️  AVISO: CNPJ do certificado (${certInfo.cnpj}) diferente do informado (${cnpj})`);
-        }
-        
-        // Criptografa senha do certificado
-        console.log('  → Criptografando senha...');
-        const senhaEncrypted = encryptSenha(senha_certificado);
         
         // Gera API Key
         console.log('  → Gerando API Key...');
@@ -249,18 +238,18 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             razao_social,
             nome_fantasia || null,
             inscricao_municipal || null,
-            codigo_municipio,
-            rawCep,
-            logradouro,
-            numero,
+            codigo_municipio || null,
+            rawCep || null,
+            logradouro || null,
+            numero || null,
             complemento || null,
-            bairro,
-            uf.toUpperCase(),
-            req.file.buffer,
+            bairro || null,
+            uf ? uf.toUpperCase() : null,
+            certificadoBuffer,
             senhaEncrypted,
-            certInfo.validadeFim.toISOString().split('T')[0],
-            certInfo.emissor,
-            certInfo.titular,
+            certInfo ? certInfo.validadeFim.toISOString().split('T')[0] : null,
+            certInfo ? certInfo.emissor : null,
+            certInfo ? certInfo.titular : null,
             opcao_simples_nacional || '3',
             regime_apuracao_tributacao || '1',
             regime_especial_tributacao || '0',
@@ -276,23 +265,17 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
         console.log(`  → ID: ${result.insertId}`);
         console.log(`  → API Key: ${apiKey.substring(0, 16)}...`);
         
-        res.status(201).json({
+        // Monta resposta
+        const resposta = {
             sucesso: true,
             mensagem: 'Empresa cadastrada com sucesso!',
             empresa: {
                 id: result.insertId,
-                cnpj: cnpj,
+                cnpj: rawCnpj,
                 razaoSocial: razao_social,
                 nomeFantasia: nome_fantasia,
                 codigoMunicipio: codigo_municipio,
                 ambiente: tipo_ambiente === '1' ? 'Produção' : 'Homologação',
-                certificado: {
-                    titular: certInfo.titular,
-                    emissor: certInfo.emissor,
-                    validade: certInfo.validadeFim,
-                    diasRestantes: certInfo.diasRestantes,
-                    status: certInfo.diasRestantes > 30 ? 'válido' : 'vencendo'
-                },
                 numeracao: {
                     serie: serie_dps || '00001',
                     proximoNumero: 1
@@ -300,7 +283,26 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             },
             apiKey: apiKey,
             aviso: '⚠️ GUARDE ESTA API KEY! Ela não será mostrada novamente.'
-        });
+        };
+        
+        // Adiciona info do certificado se foi enviado
+        if (certInfo) {
+            resposta.empresa.certificado = {
+                titular: certInfo.titular,
+                emissor: certInfo.emissor,
+                validade: certInfo.validadeFim,
+                diasRestantes: certInfo.diasRestantes,
+                status: certInfo.diasRestantes > 30 ? 'válido' : 'vencendo'
+            };
+        } else {
+            resposta.empresa.certificado = {
+                status: 'pendente',
+                mensagem: 'Certificado não enviado. Use POST /api/nfse/certificado para enviar.'
+            };
+            resposta.proximoPasso = 'O cliente deve fazer login com a API Key e enviar o certificado via POST /api/nfse/certificado';
+        }
+        
+        res.status(201).json(resposta);
         
     } catch (error) {
         console.error('❌ Erro ao cadastrar empresa:', error);
@@ -323,14 +325,16 @@ router.post('/gerar-apikey', async (req, res, next) => {
             });
         }
         
-        if (!cnpj || cnpj.length !== 14) {
+        const rawCnpj = cnpj ? cnpj.replace(/\D/g, '') : null;
+        
+        if (!rawCnpj || rawCnpj.length !== 14) {
             return res.status(400).json({
                 sucesso: false,
                 erro: 'CNPJ inválido (deve ter 14 dígitos)'
             });
         }
         
-        console.log(`🔑 Gerando nova API Key para CNPJ: ${cnpj}`);
+        console.log(`🔑 Gerando nova API Key para CNPJ: ${rawCnpj}`);
         
         const sqlBusca = `
             SELECT id, cnpj, razao_social, api_key
@@ -338,7 +342,7 @@ router.post('/gerar-apikey', async (req, res, next) => {
             WHERE cnpj = ?
         `;
         
-        const empresas = await query(sqlBusca, [cnpj]);
+        const empresas = await query(sqlBusca, [rawCnpj]);
         
         if (empresas.length === 0) {
             return res.status(404).json({
@@ -365,7 +369,7 @@ router.post('/gerar-apikey', async (req, res, next) => {
             WHERE cnpj = ?
         `;
         
-        await query(sqlUpdate, [novaAPIKey, cnpj]);
+        await query(sqlUpdate, [novaAPIKey, rawCnpj]);
         
         console.log(`✅ API Key gerada com sucesso!`);
         
@@ -415,6 +419,7 @@ router.get('/listar-empresas', async (req, res, next) => {
                 api_key_ativa,
                 ativa,
                 certificado_validade,
+                certificado_pfx IS NOT NULL as tem_certificado,
                 DATEDIFF(certificado_validade, CURDATE()) as dias_restantes_cert,
                 ultimo_numero_dps,
                 serie_dps,
@@ -439,9 +444,11 @@ router.get('/listar-empresas', async (req, res, next) => {
                 apiKeyAtiva: emp.api_key_ativa === 1,
                 ativa: emp.ativa === 1,
                 certificado: {
+                    temCertificado: emp.tem_certificado === 1,
                     validade: emp.certificado_validade,
                     diasRestantes: emp.dias_restantes_cert,
-                    status: emp.dias_restantes_cert > 30 ? 'válido' : 
+                    status: !emp.tem_certificado ? 'pendente' :
+                           emp.dias_restantes_cert > 30 ? 'válido' : 
                            emp.dias_restantes_cert > 0 ? 'vencendo' : 'vencido'
                 },
                 numeracao: {
@@ -475,7 +482,9 @@ router.post('/ativar-empresa', async (req, res, next) => {
             });
         }
         
-        if (!cnpj || cnpj.length !== 14) {
+        const rawCnpj = cnpj ? cnpj.replace(/\D/g, '') : null;
+        
+        if (!rawCnpj || rawCnpj.length !== 14) {
             return res.status(400).json({
                 sucesso: false,
                 erro: 'CNPJ inválido'
@@ -484,7 +493,7 @@ router.post('/ativar-empresa', async (req, res, next) => {
         
         const status = ativar === true || ativar === 'true' || ativar === 1;
         
-        console.log(`${status ? '✅ Ativando' : '❌ Desativando'} empresa: ${cnpj}`);
+        console.log(`${status ? '✅ Ativando' : '❌ Desativando'} empresa: ${rawCnpj}`);
         
         const sql = `
             UPDATE empresas 
@@ -492,7 +501,7 @@ router.post('/ativar-empresa', async (req, res, next) => {
             WHERE cnpj = ?
         `;
         
-        const result = await query(sql, [status, status, cnpj]);
+        const result = await query(sql, [status, status, rawCnpj]);
         
         if (result.affectedRows === 0) {
             return res.status(404).json({
@@ -504,7 +513,7 @@ router.post('/ativar-empresa', async (req, res, next) => {
         res.json({
             sucesso: true,
             mensagem: `Empresa ${status ? 'ativada' : 'desativada'} com sucesso`,
-            cnpj,
+            cnpj: rawCnpj,
             status: status ? 'ativa' : 'inativa'
         });
         
@@ -530,18 +539,21 @@ router.get('/consultar-apikey/:cnpj', async (req, res, next) => {
             });
         }
         
+        const rawCnpj = cnpj ? cnpj.replace(/\D/g, '') : null;
+        
         const sql = `
             SELECT 
                 cnpj,
                 razao_social,
                 api_key,
                 api_key_ativa,
-                ativa
+                ativa,
+                certificado_pfx IS NOT NULL as tem_certificado
             FROM empresas
             WHERE cnpj = ?
         `;
         
-        const empresas = await query(sql, [cnpj]);
+        const empresas = await query(sql, [rawCnpj]);
         
         if (empresas.length === 0) {
             return res.status(404).json({
@@ -559,7 +571,8 @@ router.get('/consultar-apikey/:cnpj', async (req, res, next) => {
                 razaoSocial: empresa.razao_social,
                 apiKey: empresa.api_key,
                 apiKeyAtiva: empresa.api_key_ativa === 1,
-                empresaAtiva: empresa.ativa === 1
+                empresaAtiva: empresa.ativa === 1,
+                temCertificado: empresa.tem_certificado === 1
             }
         });
         
@@ -571,11 +584,11 @@ router.get('/consultar-apikey/:cnpj', async (req, res, next) => {
 
 /**
  * POST /api/admin/atualizar-certificado
- * Atualiza o certificado digital de uma empresa
+ * Atualiza o certificado digital de uma empresa (via admin)
  */
 router.post('/atualizar-certificado', upload.single('certificado'), async (req, res, next) => {
     try {
-        console.log('📄 Atualizando certificado digital...');
+        console.log('📄 Atualizando certificado digital (admin)...');
         
         // Valida senha admin
         const { senha_admin } = req.body;
@@ -596,11 +609,13 @@ router.post('/atualizar-certificado', upload.single('certificado'), async (req, 
         
         const { cnpj, senha_certificado } = req.body;
         
+        const rawCnpj = cnpj ? cnpj.replace(/\D/g, '') : null;
+        
         // Validações básicas
-        if (!cnpj || cnpj.length !== 14) {
+        if (!rawCnpj || rawCnpj.length !== 14) {
             return res.status(400).json({
                 sucesso: false,
-                erro: 'CNPJ inválido (deve ter 14 dígitos sem pontuação)'
+                erro: 'CNPJ inválido (deve ter 14 dígitos)'
             });
         }
         
@@ -611,24 +626,22 @@ router.post('/atualizar-certificado', upload.single('certificado'), async (req, 
             });
         }
         
-        console.log(`  → CNPJ: ${cnpj}`);
+        console.log(`  → CNPJ: ${rawCnpj}`);
         
         // Verifica se empresa existe
         const sqlVerifica = 'SELECT id, cnpj, razao_social, certificado_validade FROM empresas WHERE cnpj = ?';
-        const empresasExistentes = await query(sqlVerifica, [cnpj]);
+        const empresasExistentes = await query(sqlVerifica, [rawCnpj]);
         
         if (empresasExistentes.length === 0) {
             return res.status(404).json({
                 sucesso: false,
-                erro: 'Empresa não encontrada',
-                mensagem: 'Use a rota /api/admin/cadastrar-empresa para cadastrar uma nova empresa'
+                erro: 'Empresa não encontrada'
             });
         }
         
         const empresaAtual = empresasExistentes[0];
         
         console.log(`  → Empresa: ${empresaAtual.razao_social}`);
-        console.log(`  → Certificado atual vence em: ${new Date(empresaAtual.certificado_validade).toLocaleDateString()}`);
         
         // Valida novo certificado
         console.log('  → Validando novo certificado digital...');
@@ -644,20 +657,7 @@ router.post('/atualizar-certificado', upload.single('certificado'), async (req, 
         
         console.log(`  → Novo certificado válido!`);
         console.log(`     Titular: ${certInfo.titular}`);
-        console.log(`     CNPJ Cert: ${certInfo.cnpj}`);
         console.log(`     Validade: ${certInfo.validadeFim.toLocaleDateString()}`);
-        console.log(`     Dias restantes: ${certInfo.diasRestantes}`);
-        
-        // Aviso se CNPJ do certificado é diferente
-        if (certInfo.cnpj && certInfo.cnpj !== cnpj) {
-            console.warn(`  ⚠️  AVISO: CNPJ do certificado (${certInfo.cnpj}) diferente do CNPJ da empresa (${cnpj})`);
-        }
-        
-        // Verifica se o novo certificado é realmente mais recente
-        const validadeAtual = new Date(empresaAtual.certificado_validade);
-        if (certInfo.validadeFim <= validadeAtual) {
-            console.warn(`  ⚠️  AVISO: Novo certificado vence antes ou na mesma data que o atual`);
-        }
         
         // Criptografa senha do certificado
         console.log('  → Criptografando senha...');
@@ -683,7 +683,7 @@ router.post('/atualizar-certificado', upload.single('certificado'), async (req, 
             certInfo.validadeFim.toISOString().split('T')[0],
             certInfo.emissor,
             certInfo.titular,
-            cnpj
+            rawCnpj
         ];
         
         await query(sqlUpdate, params);
@@ -694,12 +694,12 @@ router.post('/atualizar-certificado', upload.single('certificado'), async (req, 
             sucesso: true,
             mensagem: 'Certificado digital atualizado com sucesso!',
             empresa: {
-                cnpj: cnpj,
+                cnpj: rawCnpj,
                 razaoSocial: empresaAtual.razao_social
             },
             certificadoAnterior: {
                 validade: empresaAtual.certificado_validade,
-                status: 'substituído'
+                status: empresaAtual.certificado_validade ? 'substituído' : 'não havia'
             },
             certificadoNovo: {
                 titular: certInfo.titular,
@@ -743,10 +743,14 @@ router.get('/certificados-vencendo', async (req, res, next) => {
                 certificado_validade,
                 certificado_titular,
                 certificado_emissor,
+                certificado_pfx IS NOT NULL as tem_certificado,
                 DATEDIFF(certificado_validade, CURDATE()) as dias_restantes,
                 ativa
             FROM empresas
-            WHERE DATEDIFF(certificado_validade, CURDATE()) <= ?
+            WHERE (
+                certificado_pfx IS NULL 
+                OR DATEDIFF(certificado_validade, CURDATE()) <= ?
+            )
             ORDER BY certificado_validade ASC
         `;
         
@@ -756,7 +760,10 @@ router.get('/certificados-vencendo', async (req, res, next) => {
             const diasRestantes = emp.dias_restantes;
             let status, severidade;
             
-            if (diasRestantes < 0) {
+            if (!emp.tem_certificado) {
+                status = 'sem certificado';
+                severidade = 'critico';
+            } else if (diasRestantes < 0) {
                 status = 'vencido';
                 severidade = 'critico';
             } else if (diasRestantes === 0) {
@@ -770,12 +777,13 @@ router.get('/certificados-vencendo', async (req, res, next) => {
                 severidade = 'medio';
             } else {
                 status = 'válido';
-                severidade: 'baixo';
+                severidade = 'baixo';
             }
             
             return {
                 cnpj: emp.cnpj,
                 razaoSocial: emp.razao_social,
+                temCertificado: emp.tem_certificado === 1,
                 titular: emp.certificado_titular,
                 emissor: emp.certificado_emissor,
                 validade: emp.certificado_validade,
@@ -783,12 +791,14 @@ router.get('/certificados-vencendo', async (req, res, next) => {
                 status: status,
                 severidade: severidade,
                 empresaAtiva: emp.ativa === 1,
-                acao: diasRestantes <= 0 ? 'RENOVAR IMEDIATAMENTE' : 'Agendar renovação'
+                acao: !emp.tem_certificado ? 'ENVIAR CERTIFICADO' :
+                      diasRestantes <= 0 ? 'RENOVAR IMEDIATAMENTE' : 'Agendar renovação'
             };
         });
         
         // Agrupa por severidade
         const resumo = {
+            semCertificado: certificados.filter(c => !c.temCertificado).length,
             criticos: certificados.filter(c => c.severidade === 'critico').length,
             altos: certificados.filter(c => c.severidade === 'alto').length,
             medios: certificados.filter(c => c.severidade === 'medio').length,
