@@ -91,11 +91,6 @@ function validarCertificado(certificadoBuffer, senha) {
     }
 }
 
-/**
- * POST /api/admin/cadastrar-empresa
- * Cadastra uma nova empresa (certificado é OPCIONAL)
- * Cliente pode subir o certificado depois via /api/nfse/certificado
- */
 router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res, next) => {
     try {
         console.log('🏢 Recebendo cadastro de nova empresa...');
@@ -126,9 +121,7 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             opcao_simples_nacional,
             regime_apuracao_tributacao,
             regime_especial_tributacao,
-            serie_dps,
-            tipo_ambiente,
-            versao_aplicacao
+            tipo_ambiente
         } = req.body;
 
         const rawCnpj = cnpj ? cnpj.replace(/\D/g, '') : null;
@@ -169,7 +162,7 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
         let senhaEncrypted = null;
         let certificadoBuffer = null;
         
-        // Se enviou certificado, valida
+        // ✅ SÓ VALIDA CERTIFICADO SE FOI ENVIADO
         if (req.file && senha_certificado) {
             console.log('  → Validando certificado digital...');
             certInfo = validarCertificado(req.file.buffer, senha_certificado);
@@ -245,17 +238,17 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
             complemento || null,
             bairro || null,
             uf ? uf.toUpperCase() : null,
-            certificadoBuffer,
-            senhaEncrypted,
+            certificadoBuffer,  // ✅ Pode ser NULL
+            senhaEncrypted,     // ✅ Pode ser NULL
             certInfo ? certInfo.validadeFim.toISOString().split('T')[0] : null,
             certInfo ? certInfo.emissor : null,
             certInfo ? certInfo.titular : null,
             opcao_simples_nacional || '3',
             regime_apuracao_tributacao || '1',
             regime_especial_tributacao || '0',
-            serie_dps || '00001',
+            '00001',  // ✅ série_dps FIXO
             tipo_ambiente || '2',
-            versao_aplicacao || 'NFSeAPI_v1.0',
+            'NFSeAPI_v1.0',  // ✅ versao_aplicacao FIXO
             apiKey
         ];
         
@@ -277,7 +270,7 @@ router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res,
                 codigoMunicipio: codigo_municipio,
                 ambiente: tipo_ambiente === '1' ? 'Produção' : 'Homologação',
                 numeracao: {
-                    serie: serie_dps || '00001',
+                    serie: '00001',
                     proximoNumero: 1
                 }
             },
