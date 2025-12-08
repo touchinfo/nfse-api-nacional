@@ -717,6 +717,32 @@ router.post('/atualizar-certificado', upload.single('certificado'), async (req, 
 });
 
 /**
+ * POST /api/admin/validar-senha
+ * Valida apenas a senha administrativa (sem cadastrar nada)
+ */
+router.post('/validar-senha', async (req, res, next) => {
+    try {
+        const { senha_admin } = req.body;
+        
+        if (!validarSenhaAdmin(senha_admin)) {
+            return res.status(401).json({
+                sucesso: false,
+                erro: 'Senha administrativa inválida'
+            });
+        }
+        
+        res.json({
+            sucesso: true,
+            mensagem: 'Senha válida'
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao validar senha:', error);
+        next(error);
+    }
+});
+
+/**
  * GET /api/admin/certificados-vencendo
  * Lista certificados próximos do vencimento ou já vencidos
  */
