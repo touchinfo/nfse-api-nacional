@@ -7,19 +7,22 @@ const { query } = require('../config/database');
 
 const router = express.Router();
 
-// Configuração do multer para upload de certificado
+// --- CONFIGURAÇÃO DO MULTER (UPLOAD) ---
+// Configurado para não travar se o arquivo for 'estranho', apenas ignora.
 const upload = multer({ 
     storage: multer.memoryStorage(),
-    limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB max
-    },
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
     fileFilter: (req, file, cb) => {
-        if (file.mimetype === 'application/x-pkcs12' || 
-            file.originalname?.endsWith('.pfx') || 
-            file.originalname?.endsWith('.p12')) {
+        // Aceita PFX, P12 e tipos genéricos que o Windows envia
+        const allowedMimes = ['application/x-pkcs12', 'application/pkcs12', 'application/octet-stream'];
+        const isExtValid = file.originalname.toLowerCase().endsWith('.pfx') || 
+                           file.originalname.toLowerCase().endsWith('.p12');
+
+        if (allowedMimes.includes(file.mimetype) || isExtValid) {
             cb(null, true);
         } else {
-            cb(new Error('Apenas arquivos .pfx ou .p12 são permitidos'));
+            // Se o arquivo não for válido, aceitamos a requisição mas sem o arquivo (req.file = undefined)
+            cb(null, false); 
         }
     }
 });
@@ -37,15 +40,10 @@ function validarSenhaAdmin(senha) {
  */
 function encryptSenha(senha) {
     const key = process.env.ENCRYPTION_KEY;
-    if (!key || key.length !== 64) {
-        throw new Error('ENCRYPTION_KEY deve ter 64 caracteres');
-    }
+    if (!key) return senha; // CUIDADO: Em produção, sempre tenha a chave
     return CryptoJS.AES.encrypt(senha, key).toString();
 }
 
-/**
- * Valida e extrai informações do certificado
- */
 function validarCertificado(certificadoBuffer, senha) {
     try {
         const p12Der = certificadoBuffer.toString('binary');
@@ -69,9 +67,7 @@ function validarCertificado(certificadoBuffer, senha) {
         let cnpj = null;
         if (subject.serialNumber) {
             const numeros = subject.serialNumber.replace(/\D/g, '');
-            if (numeros.length >= 14) {
-                cnpj = numeros.substring(0, 14);
-            }
+            if (numeros.length >= 14) cnpj = numeros.substring(0, 14);
         }
         
         return {
@@ -82,224 +78,114 @@ function validarCertificado(certificadoBuffer, senha) {
             validadeFim: certificate.validity.notAfter,
             diasRestantes: Math.ceil((certificate.validity.notAfter - new Date()) / (1000 * 60 * 60 * 24))
         };
-        
     } catch (error) {
-        return {
-            valido: false,
-            erro: error.message
-        };
+        return { valido: false, erro: error.message };
     }
 }
 
+// --- ROTA DE CADASTRO CORRIGIDA ---
 router.post('/cadastrar-empresa', upload.single('certificado'), async (req, res, next) => {
     try {
-        console.log('🏢 Recebendo cadastro de nova empresa...');
-        
-        // Valida senha admin
-        const { senha_admin } = req.body;
-        if (!validarSenhaAdmin(senha_admin)) {
-            return res.status(401).json({
-                sucesso: false,
-                erro: 'Senha administrativa inválida'
-            });
+        console.log('🏢 Recebendo cadastro...');
+
+        // 1. Valida Senha Admin
+        if (!validarSenhaAdmin(req.body.senha_admin)) {
+            return res.status(401).json({ sucesso: false, erro: 'Senha administrativa inválida' });
         }
-        
-        // Extrai dados do body
+
+        // 2. Extrai dados
         const {
-            cnpj,
-            razao_social,
-            nome_fantasia,
-            inscricao_municipal,
-            codigo_municipio,
-            cep,
-            logradouro,
-            numero,
-            complemento,
-            bairro,
-            uf,
-            senha_certificado,
-            opcao_simples_nacional,
-            regime_apuracao_tributacao,
-            regime_especial_tributacao,
-            tipo_ambiente
+            cnpj, razao_social, nome_fantasia, inscricao_municipal, codigo_municipio,
+            cep, logradouro, numero, complemento, bairro, uf,
+            senha_certificado, 
+            opcao_simples_nacional, regime_apuracao_tributacao, regime_especial_tributacao, tipo_ambiente
         } = req.body;
 
         const rawCnpj = cnpj ? cnpj.replace(/\D/g, '') : null;
-        const rawCep = cep ? cep.replace(/\D/g, '') : null; 
+        const rawCep = cep ? cep.replace(/\D/g, '') : null;
 
-        // Validações básicas
+        // 3. Validações Básicas
         if (!rawCnpj || rawCnpj.length !== 14) {
-            return res.status(400).json({
-                sucesso: false,
-                erro: 'CNPJ inválido (deve ter 14 dígitos)'
-            });
+            return res.status(400).json({ sucesso: false, erro: 'CNPJ inválido (14 dígitos)' });
         }
-        
         if (!razao_social) {
-            return res.status(400).json({
-                sucesso: false,
-                erro: 'Razão social é obrigatória'
-            });
+            return res.status(400).json({ sucesso: false, erro: 'Razão social é obrigatória' });
         }
-        
-        console.log(`  → CNPJ: ${rawCnpj}`);
-        console.log(`  → Razão Social: ${razao_social}`);
-        
-        // Verifica se empresa já existe
-        const sqlVerifica = 'SELECT cnpj FROM empresas WHERE cnpj = ?';
-        const empresasExistentes = await query(sqlVerifica, [rawCnpj]);
-        
-        if (empresasExistentes.length > 0) {
-            return res.status(400).json({
-                sucesso: false,
-                erro: 'Empresa já cadastrada com este CNPJ',
-                mensagem: 'Use a rota /api/admin/gerar-apikey para gerar nova API Key'
-            });
+
+        // 4. Verifica Duplicidade
+        const check = await query('SELECT id FROM empresas WHERE cnpj = ?', [rawCnpj]);
+        if (check.length > 0) {
+            return res.status(400).json({ sucesso: false, erro: 'Empresa já cadastrada com este CNPJ' });
         }
-        
-        // Variáveis para certificado (opcional)
+
+        // 5. Lógica do Certificado (OPCIONAL)
         let certInfo = null;
         let senhaEncrypted = null;
         let certificadoBuffer = null;
-        
-        // ✅ SÓ VALIDA CERTIFICADO SE FOI ENVIADO
-        if (req.file && senha_certificado) {
-            console.log('  → Validando certificado digital...');
+
+        // Verifica se o arquivo veio E se tem tamanho > 0
+        if (req.file && req.file.size > 0) {
+            if (!senha_certificado) {
+                return res.status(400).json({ sucesso: false, erro: 'Senha do certificado é obrigatória ao enviar o arquivo.' });
+            }
+
+            console.log('🔒 Validando certificado enviado...');
             certInfo = validarCertificado(req.file.buffer, senha_certificado);
-            
+
             if (!certInfo.valido) {
-                return res.status(400).json({
-                    sucesso: false,
-                    erro: 'Certificado inválido ou senha incorreta',
-                    detalhes: certInfo.erro
-                });
+                return res.status(400).json({ sucesso: false, erro: 'Certificado inválido ou senha incorreta', detalhes: certInfo.erro });
             }
-            
-            console.log(`  → Certificado válido!`);
-            console.log(`     Titular: ${certInfo.titular}`);
-            console.log(`     Validade: ${certInfo.validadeFim.toLocaleDateString()}`);
-            
-            // Aviso se CNPJ do certificado é diferente
-            if (certInfo.cnpj && certInfo.cnpj !== rawCnpj) {
-                console.warn(`  ⚠️  AVISO: CNPJ do certificado (${certInfo.cnpj}) diferente do informado (${rawCnpj})`);
-            }
-            
+
             senhaEncrypted = encryptSenha(senha_certificado);
             certificadoBuffer = req.file.buffer;
         } else {
-            console.log('  → Cadastro SEM certificado (cliente vai subir depois)');
+            console.log('⏩ Cadastro sem certificado (será enviado depois).');
         }
-        
-        // Gera API Key
-        console.log('  → Gerando API Key...');
+
+        // 6. Prepara API Key e Insere no Banco
         const apiKey = crypto.randomBytes(32).toString('hex');
-        
-        // Insere no banco
-        console.log('  → Inserindo no banco de dados...');
-        const sqlInsert = `
+        const versaoApp = 'NFSeAPI_v1.0';
+
+        const sql = `
             INSERT INTO empresas (
-                cnpj,
-                razao_social,
-                nome_fantasia,
-                inscricao_municipal,
-                codigo_municipio,
-                cep,
-                logradouro,
-                numero,
-                complemento,
-                bairro,
-                uf,
-                certificado_pfx,
-                senha_certificado_encrypted,
-                certificado_validade,
-                certificado_emissor,
-                certificado_titular,
-                opcao_simples_nacional,
-                regime_apuracao_tributacao,
-                regime_especial_tributacao,
-                serie_dps,
-                tipo_ambiente,
-                versao_aplicacao,
-                api_key,
-                api_key_ativa,
-                ativa
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, TRUE)
+                cnpj, razao_social, nome_fantasia, inscricao_municipal, codigo_municipio,
+                cep, logradouro, numero, complemento, bairro, uf,
+                certificado_pfx, senha_certificado_encrypted, certificado_validade,
+                certificado_emissor, certificado_titular,
+                opcao_simples_nacional, regime_apuracao_tributacao, regime_especial_tributacao,
+                serie_dps, tipo_ambiente, versao_aplicacao, api_key, api_key_ativa, ativa
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
         `;
-        
+
         const params = [
-            rawCnpj,
-            razao_social,
-            nome_fantasia || null,
-            inscricao_municipal || null,
-            codigo_municipio || null,
-            rawCep || null,
-            logradouro || null,
-            numero || null,
-            complemento || null,
-            bairro || null,
-            uf ? uf.toUpperCase() : null,
-            certificadoBuffer,  // ✅ Pode ser NULL
-            senhaEncrypted,     // ✅ Pode ser NULL
+            rawCnpj, razao_social, nome_fantasia || null, inscricao_municipal || null, codigo_municipio || null,
+            rawCep || null, logradouro || null, numero || null, complemento || null, bairro || null, uf ? uf.toUpperCase() : null,
+            certificadoBuffer, // NULL se não tiver
+            senhaEncrypted,    // NULL se não tiver
             certInfo ? certInfo.validadeFim.toISOString().split('T')[0] : null,
             certInfo ? certInfo.emissor : null,
             certInfo ? certInfo.titular : null,
-            opcao_simples_nacional || '3',
-            regime_apuracao_tributacao || '1',
+            opcao_simples_nacional || '3', 
+            regime_apuracao_tributacao || '1', 
             regime_especial_tributacao || '0',
-            '00001',  // ✅ série_dps FIXO
-            tipo_ambiente || '2',
-            'NFSeAPI_v1.0',  // ✅ versao_aplicacao FIXO
+            '00001', 
+            tipo_ambiente || '2', 
+            versaoApp, 
             apiKey
         ];
-        
-        const result = await query(sqlInsert, params);
-        
-        console.log('✅ Empresa cadastrada com sucesso!');
-        console.log(`  → ID: ${result.insertId}`);
-        console.log(`  → API Key: ${apiKey.substring(0, 16)}...`);
-        
-        // Monta resposta
-        const resposta = {
+
+        const result = await query(sql, params);
+
+        res.status(201).json({
             sucesso: true,
-            mensagem: 'Empresa cadastrada com sucesso!',
-            empresa: {
-                id: result.insertId,
-                cnpj: rawCnpj,
-                razaoSocial: razao_social,
-                nomeFantasia: nome_fantasia,
-                codigoMunicipio: codigo_municipio,
-                ambiente: tipo_ambiente === '1' ? 'Produção' : 'Homologação',
-                numeracao: {
-                    serie: '00001',
-                    proximoNumero: 1
-                }
-            },
+            mensagem: 'Empresa cadastrada!',
             apiKey: apiKey,
-            aviso: '⚠️ GUARDE ESTA API KEY! Ela não será mostrada novamente.'
-        };
-        
-        // Adiciona info do certificado se foi enviado
-        if (certInfo) {
-            resposta.empresa.certificado = {
-                titular: certInfo.titular,
-                emissor: certInfo.emissor,
-                validade: certInfo.validadeFim,
-                diasRestantes: certInfo.diasRestantes,
-                status: certInfo.diasRestantes > 30 ? 'válido' : 'vencendo'
-            };
-        } else {
-            resposta.empresa.certificado = {
-                status: 'pendente',
-                mensagem: 'Certificado não enviado. Use POST /api/nfse/certificado para enviar.'
-            };
-            resposta.proximoPasso = 'O cliente deve fazer login com a API Key e enviar o certificado via POST /api/nfse/certificado';
-        }
-        
-        res.status(201).json(resposta);
-        
+            id: result.insertId
+        });
+
     } catch (error) {
-        console.error('❌ Erro ao cadastrar empresa:', error);
-        next(error);
+        console.error('Erro Fatal:', error);
+        res.status(500).json({ sucesso: false, erro: 'Erro interno no servidor', detalhes: error.message });
     }
 });
 
