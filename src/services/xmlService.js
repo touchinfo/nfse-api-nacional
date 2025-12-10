@@ -18,7 +18,6 @@ class XMLService {
             const parser = new DOMParser();
             const doc = parser.parseFromString(xmlString, 'text/xml');
             
-            // Verifica se há erros de parse
             const parseErrors = doc.getElementsByTagName('parsererror');
             if (parseErrors.length > 0) {
                 throw new Error('XML mal formado');
@@ -53,7 +52,6 @@ class XMLService {
                 throw new Error('Elemento infDPS não encontrado no XML');
             }
             
-            // Extrai CNPJ do prestador
             const prest = infDPS.prest || infDPS['ns:prest'];
             const cnpjPrestador = prest?.CNPJ || prest?.['ns:CNPJ'];
             
@@ -61,14 +59,10 @@ class XMLService {
                 throw new Error('CNPJ do prestador não encontrado no XML');
             }
             
-            // Extrai CNPJ do tomador
             const toma = infDPS.toma || infDPS['ns:toma'];
             const cnpjTomador = toma?.CNPJ || toma?.['ns:CNPJ'];
             
-            // Extrai ID da DPS
             const idDPS = infDPS['@']?.Id || infDPS['$']?.Id;
-            
-            // Extrai número e série
             const numeroDPS = infDPS.nDPS || infDPS['ns:nDPS'];
             const serieDPS = infDPS.serie || infDPS['ns:serie'];
             
@@ -92,7 +86,6 @@ class XMLService {
     static validarRegrasDPS(infoDPS) {
         const erros = [];
         
-        // Validação E0202: Prestador não pode ser igual ao tomador
         if (infoDPS.cnpjPrestador === infoDPS.cnpjTomador) {
             erros.push({
                 codigo: 'E0202',
@@ -101,7 +94,6 @@ class XMLService {
             });
         }
         
-        // Validação de CNPJ (14 dígitos)
         if (infoDPS.cnpjPrestador && infoDPS.cnpjPrestador.length !== 14) {
             erros.push({
                 codigo: 'E0001',
@@ -123,13 +115,11 @@ class XMLService {
         try {
             console.log('  → Extraindo certificado e chave privada...');
             
-            // Extrai certificado em formato PEM
             const { privateKeyPem, certificatePem, certBase64 } = 
                 CertificadoService.extrairCertificadoPEM(certificadoBuffer, senha);
             
             console.log('  → Extraindo ID do elemento infDPS...');
             
-            // Extrai o ID do elemento infDPS
             const idMatch = xmlString.match(/Id="([^"]+)"/);
             if (!idMatch) {
                 throw new Error('ID do elemento infDPS não encontrado no XML');
@@ -139,47 +129,45 @@ class XMLService {
             console.log(`  → ID encontrado: ${idDPS}`);
             console.log('  → Configurando SignedXml...');
             
-            // Cria instância do SignedXml
-            const sig = new SignedXml({
+            const sig = new SignedXml({ 
                 privateKey: privateKeyPem,
                 publicCert: certificatePem,
                 signatureAlgorithm: 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
-                canonicalizationAlgorithm: 'http://www.w3.org/TR/2001/REC-xml-c14n-20010315'
+                // Canonicalização Exclusiva (C14N) para evitar erro de namespace
+                canonicalizationAlgorithm: 'http://www.w3.org/2001/10/xml-exc-c14n#' 
             });
             
-            console.log('  → Adicionando referência ao elemento infDPS...');
-            
-            // Adiciona referência ao elemento infDPS
             sig.addReference({
                 xpath: `//*[@Id='${idDPS}']`,
                 digestAlgorithm: 'http://www.w3.org/2001/04/xmlenc#sha256',
                 transforms: [
-                    'http://www.w3.org/2000/09/xmldsig#enveloped-signature',
-                    'http://www.w3.org/TR/2001/REC-xml-c14n-20010315'
+                    'http://www.w3.org/2001/10/xml-exc-c14n#'
                 ]
             });
             
-            console.log('  → Configurando KeyInfo com certificado...');
-            
-            // Configura KeyInfo com o certificado
             sig.keyInfoProvider = {
                 getKeyInfo: function() {
-                    return `<ds:KeyInfo><ds:X509Data><ds:X509Certificate>${certBase64}</ds:X509Certificate></ds:X509Data></ds:KeyInfo>`;
+                    return `<KeyInfo><X509Data><X509Certificate>${certBase64}</X509Certificate></X509Data></KeyInfo>`;
                 }
             };
             
             console.log('  → Computando assinatura...');
             
-            // Computa a assinatura
             sig.computeSignature(xmlString, {
                 location: { reference: `//*[local-name()='infDPS']`, action: 'after' },
-                prefix: 'ds'
             });
             
-            console.log('  ✓ XML assinado com sucesso!');
+            let signedXml = sig.getSignedXml();
+
+            // --- CORREÇÃO DO CABEÇALHO (Fix System.Xml.XmlException) ---
+            // Remove qualquer declaração XML existente (como <?xml version="2.0"...)
+            // e força a versão correta 1.0
+            signedXml = signedXml.replace(/<\?xml.*?\?>\s*/gi, '');
+            signedXml = '<?xml version="1.0" encoding="UTF-8"?>' + signedXml;
+
+            console.log('  ✓ XML assinado e cabeçalho corrigido!');
             
-            // Retorna XML assinado
-            return sig.getSignedXml();
+            return signedXml;
             
         } catch (error) {
             console.error('  ✗ Erro ao assinar XML:', error);
@@ -199,9 +187,6 @@ class XMLService {
         }
     }
 
-    /**
-     * Descomprime Base64 GZIP para XML (útil para debug)
-     */
     static decodificarEDescomprimir(base64String) {
         try {
             const compressed = Buffer.from(base64String, 'base64');
@@ -212,20 +197,14 @@ class XMLService {
         }
     }
 
-    /**
-     * Processo completo: valida (XSD + regras), assina e comprime
-     */
     static async processarXML(xmlString, cnpjEmpresa) {
         console.log('📄 Iniciando processamento do XML...');
         
-        // 1. VALIDAÇÃO XSD COMPLETA (NOVO!)
         console.log('  → Executando validação XSD completa...');
         const validacaoXSD = await ValidacaoXSDService.validarXMLCompleto(xmlString);
         
         if (!validacaoXSD.valido) {
             console.log('  ✗ Validação XSD falhou!');
-            
-            // Formata erros para retorno
             const errosFormatados = validacaoXSD.erros.map(erro => ({
                 codigo: erro.codigo,
                 mensagem: erro.mensagem,
@@ -240,7 +219,6 @@ class XMLService {
             }));
         }
         
-        // Mostra warnings se houver
         if (validacaoXSD.warnings && validacaoXSD.warnings.length > 0) {
             console.log('  ⚠️  Avisos de validação:');
             validacaoXSD.warnings.forEach(warning => {
@@ -250,7 +228,6 @@ class XMLService {
         
         console.log(`  ✓ Validação XSD concluída! (${validacaoXSD.tempoValidacao}ms)`);
         
-        // 2. Extrai informações validadas
         const infoDPS = {
             idDPS: validacaoXSD.dados.id,
             numeroDPS: validacaoXSD.dados.nDPS,
@@ -260,7 +237,6 @@ class XMLService {
             cpfTomador: validacaoXSD.dados.cpfTomador
         };
         
-        // 3. Valida CNPJ da empresa com o XML
         console.log('  → Validando CNPJ da empresa...');
         if (infoDPS.cnpjPrestador !== cnpjEmpresa) {
             throw new Error(
@@ -269,11 +245,9 @@ class XMLService {
             );
         }
         
-        // 4. Busca certificado da empresa
         console.log('  → Buscando certificado digital...');
         const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
         
-        // 5. Assina o XML
         console.log('  → Assinando XML...');
         const xmlAssinado = this.assinarXML(
             xmlString,
@@ -281,7 +255,6 @@ class XMLService {
             certInfo.senha
         );
         
-        // 6. Comprime e codifica
         console.log('  → Comprimindo e codificando...');
         const dpsXmlGZipB64 = this.comprimirECodificar(xmlAssinado);
         
