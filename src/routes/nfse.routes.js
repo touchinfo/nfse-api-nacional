@@ -562,7 +562,8 @@ router.post('/emitir',
             console.log(`✅ PROCESSO CONCLUÍDO - Tempo: ${tempoTotal}ms`);
             console.log('='.repeat(70) + '\n');
             
-            res.status(dadosNFSe.sucesso ? 200 : 400).json({
+            // ✅ MONTA RESPOSTA
+            const responseData = {
                 sucesso: dadosNFSe.sucesso,
                 transmissaoId,
                 dps: {
@@ -577,7 +578,7 @@ router.post('/emitir',
                     linkConsulta: dadosNFSe.linkConsulta,
                     dataEmissao: dadosNFSe.dataEmissao,
                     situacao: dadosNFSe.situacao,
-                    xmlNFSe: dadosNFSe.xmlNFSe
+                    xmlNFSe: dadosNFSe.xmlNFSe || null
                 },
                 sefin: {
                     protocolo: dadosNFSe.protocolo,
@@ -589,7 +590,13 @@ router.post('/emitir',
                     ambiente: ambienteEnvio === '1' ? 'Produção' : 'Homologação'
                 },
                 recuperadoDeDuplicidade: ehDuplicidadeRecuperavel
-            });
+            };
+
+            // ✅ SERIALIZA MANUALMENTE PARA GARANTIR ESCAPE CORRETO
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.status(dadosNFSe.sucesso ? 200 : 400).send(
+                JSON.stringify(responseData)
+            );
             
         } catch (error) {
             console.error('❌ Erro na emissão:', error.message);
