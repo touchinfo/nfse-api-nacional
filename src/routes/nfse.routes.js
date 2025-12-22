@@ -674,6 +674,7 @@ router.post('/validar',
 
 /**
  * GET /api/nfse/consultar-por-chave/:chaveAcesso
+ * Consulta dados básicos da NFS-e pela chave de acesso
  */
 router.get('/consultar-por-chave/:chaveAcesso', verificarCertificado, async (req, res, next) => {
     try {
@@ -683,10 +684,12 @@ router.get('/consultar-por-chave/:chaveAcesso', verificarCertificado, async (req
         
         console.log(`🔍 Consultando NFS-e por chave: ${chaveAcesso.substring(0, 20)}...`);
         
-        if (!chaveAcesso || chaveAcesso.length !== 44) {
+        // Valida chave de acesso (NFS-e Nacional = 50 caracteres)
+        if (!chaveAcesso || chaveAcesso.length !== 50) {
             return res.status(400).json({
                 sucesso: false,
-                erro: 'Chave de acesso inválida (deve ter 44 caracteres)'
+                erro: 'Chave de acesso inválida (deve ter 50 caracteres)',
+                recebido: chaveAcesso?.length || 0
             });
         }
         
@@ -724,7 +727,154 @@ router.get('/consultar-por-chave/:chaveAcesso', verificarCertificado, async (req
 });
 
 /**
+ * GET /api/nfse/:chaveAcesso/xml
+ * Retorna o XML completo da NFS-e
+ * 
+ * Query params:
+ *   - formato=raw : Retorna XML puro para download
+ *   - (padrão)    : Retorna JSON com XML embutido
+ */
+router.get('/:chaveAcesso/xml', verificarCertificado, async (req, res, next) => {
+    try {
+        const { chaveAcesso } = req.params;
+        const { formato } = req.query; // ?formato=raw para XML puro
+        const cnpjEmpresa = req.empresa.cnpj;
+        const tipoAmbiente = req.empresa.tipo_ambiente;
+        
+        console.log(`📄 Consultando XML da NFS-e: ${chaveAcesso.substring(0, 20)}...`);
+        
+        // Valida chave de acesso (NFS-e Nacional = 50 caracteres)
+        if (!chaveAcesso || chaveAcesso.length !== 50) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Chave de acesso inválida (deve ter 50 caracteres)',
+                recebido: chaveAcesso?.length || 0
+            });
+        }
+        
+        // Consulta na SEFIN
+        const resultado = await SefinResponseProcessor.consultarDadosNFSe(
+            chaveAcesso,
+            cnpjEmpresa,
+            tipoAmbiente
+        );
+        
+        if (!resultado.sucesso) {
+            return res.status(404).json({
+                sucesso: false,
+                erro: 'NFS-e não encontrada',
+                detalhes: resultado.erro
+            });
+        }
+        
+        if (!resultado.xmlNFSe) {
+            return res.status(404).json({
+                sucesso: false,
+                erro: 'XML da NFS-e não disponível',
+                mensagem: 'A nota foi encontrada mas o XML ainda não está disponível para download'
+            });
+        }
+        
+        // Se formato=raw, retorna XML puro para download
+        if (formato === 'raw') {
+            res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+            res.setHeader('Content-Disposition', `attachment; filename="NFSe_${chaveAcesso}.xml"`);
+            return res.send(resultado.xmlNFSe);
+        }
+        
+        // Padrão: retorna JSON com XML embutido
+        res.json({
+            sucesso: true,
+            nfse: {
+                chaveAcesso: chaveAcesso,
+                numeroNFSe: resultado.numeroNFSe,
+                codigoVerificacao: resultado.codigoVerificacao,
+                dataEmissao: resultado.dataEmissao,
+                situacao: resultado.situacao
+            },
+            xml: resultado.xmlNFSe
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao consultar XML:', error.message);
+        next(error);
+    }
+});
+
+/**
+ * GET /api/nfse/:chaveAcesso/pdf
+ * Retorna o PDF (DANFSE) da NFS-e para download
+ * 
+ * Query params:
+ *   - formato=base64 : Retorna JSON com PDF em Base64
+ *   - (padrão)       : Retorna PDF binário para download direto
+ */
+router.get('/:chaveAcesso/pdf', verificarCertificado, async (req, res, next) => {
+    try {
+        const { chaveAcesso } = req.params;
+        const { formato } = req.query; // ?formato=base64 para retornar em JSON
+        const cnpjEmpresa = req.empresa.cnpj;
+        const tipoAmbiente = req.empresa.tipo_ambiente;
+        
+        console.log(`📥 Baixando PDF da NFS-e: ${chaveAcesso.substring(0, 20)}...`);
+        
+        // Valida chave de acesso
+        // Valida chave de acesso (NFS-e Nacional = 50 caracteres)
+        if (!chaveAcesso || chaveAcesso.length !== 50) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Chave de acesso inválida (deve ter 50 caracteres)',
+                recebido: chaveAcesso?.length || 0
+            });
+        }
+        
+        // Baixa o PDF da SEFIN
+        const resultado = await SefinResponseProcessor.baixarPDFBase64(
+            chaveAcesso,
+            cnpjEmpresa,
+            tipoAmbiente
+        );
+        
+        if (!resultado.sucesso) {
+            return res.status(404).json({
+                sucesso: false,
+                erro: 'PDF não disponível',
+                detalhes: resultado.erro,
+                mensagem: 'O DANFSE pode não estar disponível ainda. Tente novamente em alguns minutos.',
+                linkAlternativo: SefinResponseProcessor.montarLinkPDF(chaveAcesso, tipoAmbiente)
+            });
+        }
+        
+        // Se formato=base64, retorna JSON com PDF em Base64
+        if (formato === 'base64') {
+            return res.json({
+                sucesso: true,
+                chaveAcesso: chaveAcesso,
+                pdfBase64: resultado.pdfBase64,
+                tamanho: resultado.tamanhoKB,
+                contentType: 'application/pdf',
+                nomeArquivo: `DANFSE_${chaveAcesso}.pdf`
+            });
+        }
+        
+        // Padrão: retorna o PDF binário para download direto
+        const pdfBuffer = Buffer.from(resultado.pdfBase64, 'base64');
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="DANFSE_${chaveAcesso}.pdf"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
+        
+        res.send(pdfBuffer);
+        
+    } catch (error) {
+        console.error('❌ Erro ao baixar PDF:', error.message);
+        next(error);
+    }
+});
+
+/**
  * GET /api/nfse/consultar/:idDPS
+ * Consulta uma transmissão pelo ID da DPS (banco local)
  */
 router.get('/consultar/:idDPS', async (req, res, next) => {
     try {
@@ -770,6 +920,7 @@ router.get('/consultar/:idDPS', async (req, res, next) => {
 
 /**
  * GET /api/nfse/listar
+ * Lista transmissões com paginação
  */
 router.get('/listar',
     [
@@ -802,6 +953,7 @@ router.get('/listar',
 
 /**
  * GET /api/nfse/status
+ * Status da empresa e última numeração
  */
 router.get('/status', async (req, res, next) => {
     try {
