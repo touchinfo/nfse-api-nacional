@@ -7,6 +7,7 @@ const XMLService = require('../services/xmlService');
 const SefinService = require('../services/sefinService');
 const SefinResponseProcessor = require('../services/sefinResponseProcessor');
 const { query } = require('../config/database');
+const XMLEventoService = require('../services/xmlEventoService');
 
 const router = express.Router();
 
@@ -261,6 +262,331 @@ router.post('/certificado', uploadCertificado.single('certificado'), async (req,
         next(error);
     }
 });
+
+/**
+ * Helper: Descrição do tipo de evento
+ */
+function obterDescricaoTipoEvento(tipo) {
+    const tipos = {
+        '1': 'Cancelamento',
+        '2': 'Carta de Correção'
+    };
+    return tipos[tipo] || `Tipo ${tipo}`;
+}
+
+/**
+ * GET /api/nfse/:chaveAcesso/eventos
+ * Lista TODOS os eventos da NFS-e
+ */
+router.get('/:chaveAcesso/eventos', verificarCertificado, async (req, res, next) => {
+    try {
+        const { chaveAcesso } = req.params;
+        const { descomprimir } = req.query; // ?descomprimir=true para obter XMLs
+        const cnpjEmpresa = req.empresa.cnpj;
+        const tipoAmbiente = req.empresa.tipo_ambiente;
+        
+        console.log(`📋 Consultando eventos da NFS-e: ${chaveAcesso.substring(0, 20)}...`);
+        
+        // Valida chave de acesso
+        if (!chaveAcesso || chaveAcesso.length !== 50) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Chave de acesso inválida (deve ter 50 caracteres)'
+            });
+        }
+        
+        const descomprimirXML = descomprimir === 'true' || descomprimir === '1';
+        
+        const resultado = await SefinService.consultarEventosNFSe(
+            chaveAcesso,
+            cnpjEmpresa,
+            tipoAmbiente,
+            descomprimirXML
+        );
+        
+        if (!resultado.sucesso && resultado.status !== 404) {
+            return res.status(resultado.status || 500).json(resultado);
+        }
+        
+        // Formata resposta amigável
+        const eventosFormatados = resultado.eventos.map(evento => ({
+            tipoEvento: evento.tpEvento || evento.tipoEvento,
+            descricao: obterDescricaoTipoEvento(evento.tpEvento || evento.tipoEvento),
+            numeroSequencia: evento.nSeqEvento || evento.numSeqEvento,
+            dataHora: evento.dhEvento || evento.dataHoraProcessamento,
+            versaoApp: evento.verAplic || evento.versaoAplicativo,
+            ambiente: evento.tpAmb || evento.tipoAmbiente,
+            situacao: evento.situacao || 'Registrado',
+            eventoXmlGZipB64: evento.eventoXmlGZipB64,
+            eventoXML: evento.eventoXML // Só vem se descomprimir=true
+        }));
+        
+        res.json({
+            sucesso: true,
+            chaveAcesso: chaveAcesso,
+            quantidade: resultado.quantidade,
+            eventos: eventosFormatados,
+            mensagem: resultado.quantidade === 0 
+                ? 'Nenhum evento registrado para esta NFS-e' 
+                : `${resultado.quantidade} evento(s) encontrado(s)`
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao consultar eventos:', error.message);
+        next(error);
+    }
+});
+
+/**
+ * GET /api/nfse/:chaveAcesso/eventos/:tipoEvento/:numSeqEvento
+ * Consulta um evento ESPECÍFICO
+ */
+router.get('/:chaveAcesso/eventos/:tipoEvento/:numSeqEvento', verificarCertificado, async (req, res, next) => {
+    try {
+        const { chaveAcesso, tipoEvento, numSeqEvento } = req.params;
+        const { descomprimir } = req.query; // ?descomprimir=true para obter XML
+        const cnpjEmpresa = req.empresa.cnpj;
+        const tipoAmbiente = req.empresa.tipo_ambiente;
+        
+        console.log(`🔍 Consultando evento específico: tipo ${tipoEvento}, seq ${numSeqEvento}`);
+        
+        // Validações
+        if (!chaveAcesso || chaveAcesso.length !== 50) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Chave de acesso inválida (deve ter 50 caracteres)'
+            });
+        }
+        
+        if (!['1', '2'].includes(tipoEvento)) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Tipo de evento inválido (1=Cancelamento, 2=Carta Correção)'
+            });
+        }
+        
+        const descomprimirXML = descomprimir === 'true' || descomprimir === '1';
+        
+        const resultado = await SefinService.consultarEventoEspecifico(
+            chaveAcesso,
+            tipoEvento,
+            numSeqEvento,
+            cnpjEmpresa,
+            tipoAmbiente,
+            descomprimirXML
+        );
+        
+        if (!resultado.sucesso) {
+            return res.status(resultado.status || 404).json(resultado);
+        }
+        
+        res.json({
+            sucesso: true,
+            chaveAcesso: chaveAcesso,
+            evento: {
+                tipo: tipoEvento,
+                descricao: obterDescricaoTipoEvento(tipoEvento),
+                numeroSequencia: numSeqEvento,
+                ambiente: resultado.evento.tipoAmbiente,
+                versaoApp: resultado.evento.versaoAplicativo,
+                dataHoraProcessamento: resultado.evento.dataHoraProcessamento,
+                eventoXmlGZipB64: resultado.evento.eventoXmlGZipB64,
+                eventoXML: resultado.evento.eventoXML // Só vem se descomprimir=true
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao consultar evento específico:', error.message);
+        next(error);
+    }
+});
+
+/**
+ * ADICIONE ESTE CÓDIGO NO SEU nfse.routes.js
+ * 
+ * Adicione os imports no topo:
+ * const XMLEventoService = require('../services/xmlEventoService');
+ * const SefinEventoService = require('../services/sefinEventoService');
+ */
+
+/**
+ * POST /api/nfse/:chaveAcesso/cancelar
+ * Cancela uma NFS-e emitida
+ * 
+ * URL: /api/nfse/33045572201800344000148000000000002325124472728969/cancelar
+ * 
+ * Body:
+ *   {
+ *     "codigoMotivo": "1",
+ *     "motivo": "Erro no serviço prestado"
+ *   }
+ */
+router.post('/:chaveAcesso/cancelar',
+    verificarCertificado,
+    [
+        body('codigoMotivo').notEmpty().withMessage('Código do motivo é obrigatório'),
+        body('motivo').notEmpty().withMessage('Motivo é obrigatório')
+    ],
+    validarErros,
+    async (req, res, next) => {
+        try {
+            const { chaveAcesso } = req.params;
+            const { codigoMotivo, motivo } = req.body;
+            const cnpjEmpresa = req.empresa.cnpj;
+            const tipoAmbiente = req.empresa.tipo_ambiente;
+
+            // Validar chave de acesso (50 dígitos)
+            if (!chaveAcesso || chaveAcesso.length !== 50) {
+                return res.status(400).json({
+                    sucesso: false,
+                    erro: 'Chave de acesso inválida (deve ter 50 caracteres)',
+                    recebido: chaveAcesso?.length || 0
+                });
+            }
+
+            console.log('\n' + '='.repeat(70));
+            console.log(`🚫 CANCELAMENTO - Empresa: ${req.empresa.razao_social}`);
+            console.log(`   Chave: ${chaveAcesso}`);
+            console.log(`   Motivo: ${codigoMotivo} - ${motivo}`);
+            console.log('='.repeat(70));
+
+            // 1. Processa o evento de cancelamento
+            const XMLEventoService = require('../services/xmlEventoService');
+            const SefinEventoService = require('../services/sefinEventoService');
+
+            const resultado = await XMLEventoService.processarCancelamento({
+                chaveAcesso,
+                codigoMotivo: parseInt(codigoMotivo),
+                motivoTexto: motivo,
+                tipoAmbiente,
+                versaoAplicacao: 'NFSeAPI_v1.0'
+            }, cnpjEmpresa);
+
+            // 2. Envia para SEFIN (chaveAcesso vai na URL)
+            const respostaSefin = await SefinEventoService.enviarEvento(
+                resultado.eventoXmlGZipB64,
+                chaveAcesso,  // chave vai na URL: /nfse/{chaveAcesso}/eventos
+                cnpjEmpresa,
+                tipoAmbiente
+            );
+
+            // 3. Processa resposta
+            if (respostaSefin.sucesso) {
+                console.log('✅ Cancelamento processado com sucesso!');
+
+                res.json({
+                    sucesso: true,
+                    mensagem: 'NFS-e cancelada com sucesso',
+                    evento: {
+                        tipoEvento: '101101',
+                        chaveAcesso,
+                        protocolo: respostaSefin.dados?.protocolo,
+                        dataEvento: new Date().toISOString()
+                    },
+                    sefin: respostaSefin.dados
+                });
+            } else {
+                console.log('❌ Erro no cancelamento:', respostaSefin.erro);
+
+                res.status(400).json({
+                    sucesso: false,
+                    erro: respostaSefin.erro || 'Erro ao cancelar NFS-e',
+                    detalhes: respostaSefin.dados?.erros || respostaSefin.detalhes
+                });
+            }
+
+        } catch (error) {
+            console.error('❌ Erro no cancelamento:', error.message);
+            next(error);
+        }
+    }
+);
+/**
+ * POST /api/nfse/:chaveAcesso/eventos
+ * Registra um evento genérico (cancelamento, carta correção, etc)
+ */
+router.post('/:chaveAcesso/eventos',
+    verificarCertificado,
+    [
+        body('tpEvento')
+            .notEmpty().withMessage('Tipo de evento é obrigatório')
+            .isIn(['1', '2']).withMessage('Tipo de evento inválido (1=Cancelamento, 2=Carta Correção)'),
+        body('nSeqEvento')
+            .notEmpty().withMessage('Número de sequência é obrigatório')
+            .isInt({ min: 1 }).withMessage('Número de sequência deve ser >= 1'),
+        body('xMotivo')
+            .notEmpty().withMessage('Motivo é obrigatório')
+            .isLength({ min: 15 }).withMessage('Motivo deve ter no mínimo 15 caracteres')
+    ],
+    validarErros,
+    async (req, res, next) => {
+        try {
+            const { chaveAcesso } = req.params;
+            const { tpEvento, nSeqEvento, xMotivo } = req.body;
+            const cnpjEmpresa = req.empresa.cnpj;
+            const tipoAmbiente = req.empresa.tipo_ambiente;
+            
+            console.log(`📤 Registrando evento tipo ${tpEvento} seq ${nSeqEvento}`);
+            
+            // Valida chave de acesso
+            if (!chaveAcesso || chaveAcesso.length !== 50) {
+                return res.status(400).json({
+                    sucesso: false,
+                    erro: 'Chave de acesso inválida (deve ter 50 caracteres)'
+                });
+            }
+            
+            // Monta dados do evento
+            const dadosEvento = {
+                chNFSe: chaveAcesso,
+                tpAmb: tipoAmbiente,
+                verAplic: 'NFSeAPI_v1.0',
+                CNPJAutor: cnpjEmpresa,
+                dhEvento: new Date().toISOString(),
+                tpEvento: tpEvento,
+                nSeqEvento: nSeqEvento.toString(),
+                xMotivo: xMotivo
+            };
+            
+            // Registra evento
+            const resultado = await SefinService.registrarEvento(
+                chaveAcesso,
+                dadosEvento,
+                cnpjEmpresa,
+                tipoAmbiente
+            );
+            
+            if (!resultado.sucesso) {
+                return res.status(400).json({
+                    sucesso: false,
+                    erro: 'Erro ao registrar evento',
+                    detalhes: resultado.erro || resultado.detalhes,
+                    dados: resultado.dados
+                });
+            }
+            
+            res.json({
+                sucesso: true,
+                mensagem: 'Evento registrado com sucesso',
+                evento: {
+                    tipo: tpEvento,
+                    descricao: obterDescricaoTipoEvento(tpEvento),
+                    numeroSequencia: nSeqEvento,
+                    motivo: xMotivo
+                },
+                retornoSEFIN: resultado.dados,
+                debug: {
+                    xmlOriginal: resultado.xmlOriginal,
+                    xmlAssinado: resultado.xmlAssinado
+                }
+            });
+            
+        } catch (error) {
+            console.error('❌ Erro ao registrar evento:', error.message);
+            next(error);
+        }
+    }
+);
 
 /**
  * GET /api/nfse/certificado
