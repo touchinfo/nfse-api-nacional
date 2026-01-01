@@ -767,7 +767,7 @@ router.post('/emitir',
             
             // 1. Processa o XML
             const resultado = await XMLService.processarXML(xml, cnpjEmpresa);
-            const ambienteEnvio = tipoAmbiente || req.empresa.tipo_ambiente;
+            const ambienteEnvio = process.env.SEFIN_AMBIENTE || tipoAmbiente || req.empresa.tipo_ambiente;
             
             // 2. Envia para SEFIN
             const respostaSefin = await SefinService.enviarDPS(
