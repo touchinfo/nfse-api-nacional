@@ -47,7 +47,8 @@ const limiter = rateLimit({
         erro: 'Muitas requisições. Tente novamente mais tarde.'
     },
     standardHeaders: true,
-    legacyHeaders: false
+    legacyHeaders: false,
+    validate: false 
 });
 
 app.use('/api/', limiter);
