@@ -12,6 +12,8 @@ const adminRoutes = require('./routes/admin.routes');
 
 const app = express();
 
+app.set('trust proxy', true);
+
 // ============================================
 // MIDDLEWARES GLOBAIS
 // ============================================
