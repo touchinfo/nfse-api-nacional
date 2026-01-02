@@ -1,3 +1,5 @@
+// SUBSTITUA TODO O ARQUIVO POR ESTE:
+
 const axios = require('axios');
 const https = require('https');
 const CertificadoService = require('./certificadoService');
@@ -12,11 +14,22 @@ const XMLEventoService = require('./xmlEventoService');
 class SefinEventoService {
 
     /**
+     * ✅ HELPER: Obtém o tipo de ambiente do .env ou fallback
+     */
+    static obterTipoAmbiente(tipoAmbienteFallback) {
+        return process.env.SEFIN_AMBIENTE || tipoAmbienteFallback || '2';
+    }
+
+    /**
      * URL base da SEFIN
+     * ✅ CORRIGIDO: 1 = Produção, 2 = Homologação
      */
     static getURLBase(tipoAmbiente) {
-        return tipoAmbiente === '1'
-            ? 'https://sefin.producao.nfse.gov.br'
+        // Garante que lê do ENV primeiro
+        const ambiente = this.obterTipoAmbiente(tipoAmbiente);
+        
+        return ambiente === '1'
+            ? 'https://sefin.nfse.gov.br'
             : 'https://sefin.producaorestrita.nfse.gov.br';
     }
 
@@ -24,9 +37,13 @@ class SefinEventoService {
      * Envia evento genérico para a SEFIN Nacional
      * POST /SefinNacional/nfse/{chaveAcesso}/eventos
      */
-    static async enviarEvento(eventoXmlGZipB64, chaveAcesso, cnpjEmpresa, tipoAmbiente = '2') {
+    static async enviarEvento(eventoXmlGZipB64, chaveAcesso, cnpjEmpresa, tipoAmbienteParam) {
         try {
+            // ✅ SEMPRE lê do ENV primeiro!
+            const tipoAmbiente = this.obterTipoAmbiente(tipoAmbienteParam);
+            
             console.log('📤 Enviando evento para SEFIN Nacional...');
+            console.log(`   Ambiente: ${tipoAmbiente === '1' ? 'PRODUÇÃO' : 'HOMOLOGAÇÃO'}`);
 
             // Busca certificado para mTLS
             console.log('  → Configurando certificado para autenticação mTLS...');
@@ -102,36 +119,29 @@ class SefinEventoService {
 
     /**
      * Envia evento de SUBSTITUIÇÃO para a SEFIN
-     * 
-     * FLUXO DE SUBSTITUIÇÃO:
-     * 1. Primeiro emita a nova NFS-e (substituta) via POST /api/nfse/emitir
-     * 2. Depois chame este método passando a chave original e a chave da nova
-     * 3. A nota original ficará com situação "Substituída"
-     * 
-     * @param {Object} dados
-     * @param {string} dados.chaveAcesso - Chave da NFS-e ORIGINAL (será substituída)
-     * @param {string} dados.chaveSubstituta - Chave da NFS-e NOVA (substituta)
-     * @param {number} dados.codigoMotivo - Código do motivo (1-9)
-     * @param {string} dados.motivoTexto - Descrição do motivo (15-255 chars)
-     * @param {string} dados.tipoAmbiente - 1=Produção, 2=Homologação
-     * @param {string} dados.versaoAplicacao - Versão do aplicativo
-     * @param {string} cnpjEmpresa - CNPJ da empresa
      */
     static async enviarEventoSubstituicao(dados, cnpjEmpresa) {
         try {
+            // ✅ SEMPRE lê do ENV primeiro!
+            const tipoAmbiente = this.obterTipoAmbiente(dados.tipoAmbiente);
+            
             console.log('📤 Enviando evento de SUBSTITUIÇÃO para SEFIN...');
+            console.log(`   Ambiente: ${tipoAmbiente === '1' ? 'PRODUÇÃO' : 'HOMOLOGAÇÃO'}`);
             console.log(`   NFS-e Original: ${dados.chaveAcesso}`);
             console.log(`   NFS-e Substituta: ${dados.chaveSubstituta}`);
 
             // 1. Processa o XML do evento (monta, assina, comprime)
-            const eventoProcessado = await XMLEventoService.processarSubstituicao(dados, cnpjEmpresa);
+            const eventoProcessado = await XMLEventoService.processarSubstituicao({
+                ...dados,
+                tipoAmbiente // Passa o ambiente já resolvido
+            }, cnpjEmpresa);
 
             // 2. Envia usando método genérico
             const resultado = await this.enviarEvento(
                 eventoProcessado.eventoXmlGZipB64,
                 dados.chaveAcesso,
                 cnpjEmpresa,
-                dados.tipoAmbiente
+                tipoAmbiente
             );
 
             if (resultado.sucesso) {

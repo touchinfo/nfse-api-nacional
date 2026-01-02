@@ -277,7 +277,7 @@ class SefinService {
 
             // URL CORRETA
             const urlBase = tipoAmbiente === '1'
-                ? 'https://sefin.producao.nfse.gov.br'
+                ? 'https://sefin.nfse.gov.br'
                 : 'https://sefin.producaorestrita.nfse.gov.br';
 
             const urlCompleta = `${urlBase}/SefinNacional/nfse/${chaveAcesso}`;
@@ -382,7 +382,7 @@ class SefinService {
             
             // URL correta
             const urlBase = tipoAmbiente === '1'
-                ? 'https://sefin.producao.nfse.gov.br'
+                ? 'https://sefin.nfse.gov.br'
                 : 'https://sefin.producaorestrita.nfse.gov.br';
             
             const urlCompleta = `${urlBase}/SefinNacional/nfse/${chaveAcesso}/eventos`;
@@ -498,7 +498,7 @@ class SefinService {
             
             // URL correta
             const urlBase = tipoAmbiente === '1'
-                ? 'https://sefin.producao.nfse.gov.br'
+                ? 'https://sefin.nfse.gov.br'
                 : 'https://sefin.producaorestrita.nfse.gov.br';
             
             const urlCompleta = `${urlBase}/SefinNacional/nfse/${chaveAcesso}/eventos/${tipoEvento}/${numSeqEvento}`;
@@ -596,7 +596,7 @@ class SefinService {
             
             // 4. URL correta
             const urlBase = tipoAmbiente === '1'
-                ? 'https://sefin.producao.nfse.gov.br'
+                ? 'https://sefin.nfse.gov.br'
                 : 'https://sefin.producaorestrita.nfse.gov.br';
             
             const urlCompleta = `${urlBase}/SefinNacional/nfse/${chaveAcesso}/eventos`;

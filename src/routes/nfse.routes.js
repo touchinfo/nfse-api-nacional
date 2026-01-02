@@ -283,8 +283,7 @@ router.get('/:chaveAcesso/eventos', verificarCertificado, async (req, res, next)
         const { chaveAcesso } = req.params;
         const { descomprimir } = req.query; // ?descomprimir=true para obter XMLs
         const cnpjEmpresa = req.empresa.cnpj;
-        const tipoAmbiente = req.empresa.tipo_ambiente;
-        
+        const tipoAmbiente = process.env.SEFIN_AMBIENTE || req.empresa.tipo_ambiente; 
         console.log(`📋 Consultando eventos da NFS-e: ${chaveAcesso.substring(0, 20)}...`);
         
         // Valida chave de acesso

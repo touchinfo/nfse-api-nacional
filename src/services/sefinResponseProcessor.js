@@ -213,7 +213,7 @@ static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
         });
 
         const urlSefin = tipoAmbiente === '1'
-            ? 'https://sefin.producao.nfse.gov.br'
+            ? 'https://sefin.nfse.gov.br'
             : 'https://sefin.producaorestrita.nfse.gov.br';
 
         const urlCompleta = `${urlSefin}/SefinNacional/nfse/${chaveAcesso}`;
@@ -293,7 +293,7 @@ static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
                 rejectUnauthorized: tipoAmbiente === '1'
             });
 
-            const urlSefin = tipoAmbiente === '1' ? 'https://sefin.producao.nfse.gov.br/SefinNacional' : 'https://sefin.producaorestrita.nfse.gov.br/SefinNacional';
+            const urlSefin = tipoAmbiente === '1' ? 'https://sefin.nfse.gov.br/SefinNacional' : 'https://sefin.producaorestrita.nfse.gov.br/SefinNacional';
             const urlCompleta = `${urlSefin}/dps/${idDPS}`;
 
             const response = await axios.get(urlCompleta, {
@@ -323,7 +323,7 @@ static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
  */
 static montarLinkConsulta(chaveAcesso, tipoAmbiente) {
     const urlBase = tipoAmbiente === '1'
-        ? 'https://sefin.producao.nfse.gov.br'
+        ? 'https://sefin.nfse.gov.br'
         : 'https://sefin.producaorestrita.nfse.gov.br';
 
     return `${urlBase}/SefinNacional/nfse/${chaveAcesso}`;
