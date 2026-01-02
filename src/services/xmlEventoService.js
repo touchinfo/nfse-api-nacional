@@ -6,6 +6,10 @@ const CertificadoService = require('./certificadoService');
 /**
  * Service para geração de XML de Eventos NFS-e Nacional
  * Conforme XSD oficial: pedRegEvento_v1.01.xsd
+ * 
+ * ATUALIZADO EM 01/01/2026:
+ * - Removido nSeqEvento do ID (PRE + chNFSe + tpEvento = 59 chars)
+ * - Removido campo <nPedRegEvento> (não existe mais no schema)
  */
 class XMLEventoService {
 
@@ -13,8 +17,35 @@ class XMLEventoService {
     static VERSAO = '1.01';
 
     /**
+     * Códigos de justificativa de cancelamento (TSCodJustCanc)
+     */
+    static CODIGOS_CANCELAMENTO = {
+        1: 'Erro na emissão',
+        2: 'Serviço não prestado',
+        3: 'Erro de assinatura',
+        4: 'Duplicidade da nota',
+        5: 'Erro de processamento',
+        9: 'Outros'
+    };
+
+    /**
+     * Códigos de motivo de substituição
+     */
+    static CODIGOS_SUBSTITUICAO = {
+        1: 'Erro no valor do serviço',
+        2: 'Erro nos dados do tomador',
+        3: 'Erro na descrição do serviço',
+        4: 'Erro na tributação',
+        9: 'Outros'
+    };
+
+    /**
      * Gera XML de pedido de registro de evento de cancelamento
      * Estrutura: pedRegEvento > infPedReg > e101101
+     * 
+     * CORREÇÃO 01/01/2026:
+     * - ID = PRE + chNFSe(50) + tpEvento(6) = 59 caracteres
+     * - Campo nPedRegEvento REMOVIDO do schema
      */
     static montarXMLCancelamento(dados) {
         const {
@@ -40,10 +71,11 @@ class XMLEventoService {
         const agora = new Date();
         const dhEvento = this.formatarDataHora(agora);
         
-        // ID conforme padrão: PRE + chNFSe(50) + tpEvento(6) + nSeqEvento(3)
-        // Exemplo: PRE431490222YYYYYYYYYYYYYY000000000001825060784034730101101001
-        const idPedReg = `PRE${chaveAcesso}101101001`;
+        // ✅ CORREÇÃO: ID = PRE + chNFSe(50) + tpEvento(6) = 59 caracteres
+        // NÃO inclui mais o nSeqEvento no final!
+        const idPedReg = `PRE${chaveAcesso}101101`;
 
+        // ✅ CORREÇÃO: Removido campo <nPedRegEvento> - não existe mais no schema
         const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <pedRegEvento xmlns="${this.NAMESPACE}" versao="${this.VERSAO}">
     <infPedReg Id="${idPedReg}">
@@ -52,12 +84,81 @@ class XMLEventoService {
         <dhEvento>${dhEvento}</dhEvento>
         <CNPJAutor>${cnpjAutor}</CNPJAutor>
         <chNFSe>${chaveAcesso}</chNFSe>
-        <nPedRegEvento>1</nPedRegEvento>
         <e101101>
             <xDesc>Cancelamento de NFS-e</xDesc>
             <cMotivo>${codigoMotivo}</cMotivo>
             <xMotivo>${this.escaparXML(motivoTexto)}</xMotivo>
         </e101101>
+    </infPedReg>
+</pedRegEvento>`;
+
+        return xml;
+    }
+
+    /**
+     * Gera XML de pedido de registro de evento de SUBSTITUIÇÃO
+     * Evento: e105102 (Substituição de NFS-e)
+     * 
+     * CORREÇÃO 01/01/2026:
+     * - ID = PRE + chNFSe(50) + tpEvento(6) = 59 caracteres
+     * - Campo nPedRegEvento REMOVIDO do schema
+     * 
+     * @param {Object} dados
+     * @param {string} dados.chaveAcesso - Chave da NFS-e a ser substituída (50 dígitos)
+     * @param {string} dados.chaveSubstituta - Chave da nova NFS-e substituta (50 dígitos)
+     * @param {string} dados.cnpjAutor - CNPJ do autor do evento (14 dígitos)
+     * @param {number} dados.codigoMotivo - Código do motivo (1-9)
+     * @param {string} dados.motivoTexto - Descrição do motivo
+     * @param {string} dados.tipoAmbiente - 1=Prod, 2=Homolog
+     * @param {string} dados.versaoAplicacao - Ex: "NFSeAPI_v1.0"
+     */
+    static montarXMLSubstituicao(dados) {
+        const {
+            chaveAcesso,      // Chave da NFS-e ORIGINAL (a ser substituída)
+            chaveSubstituta,  // Chave da NFS-e NOVA (substituta)
+            cnpjAutor,
+            codigoMotivo,
+            motivoTexto,
+            tipoAmbiente,
+            versaoAplicacao
+        } = dados;
+
+        // Validações
+        if (!chaveAcesso || chaveAcesso.length !== 50) {
+            throw new Error('Chave de acesso da NFS-e original deve ter 50 dígitos');
+        }
+        if (!chaveSubstituta || chaveSubstituta.length !== 50) {
+            throw new Error('Chave de acesso da NFS-e substituta deve ter 50 dígitos');
+        }
+        if (!cnpjAutor || cnpjAutor.length !== 14) {
+            throw new Error('CNPJ do autor deve ter 14 dígitos');
+        }
+        if (!codigoMotivo || codigoMotivo < 1 || codigoMotivo > 9) {
+            throw new Error('Código do motivo deve ser entre 1 e 9');
+        }
+
+        const agora = new Date();
+        const dhEvento = this.formatarDataHora(agora);
+        
+        // ✅ CORREÇÃO: ID = PRE + chNFSe(50) + tpEvento(6) = 59 caracteres
+        // tpEvento para substituição = 105102
+        const idPedReg = `PRE${chaveAcesso}105102`;
+
+        // ✅ CORREÇÃO: Removido campo <nPedRegEvento> - não existe mais no schema
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<pedRegEvento xmlns="${this.NAMESPACE}" versao="${this.VERSAO}">
+    <infPedReg Id="${idPedReg}">
+        <tpAmb>${tipoAmbiente}</tpAmb>
+        <verAplic>${versaoAplicacao || 'NFSeAPI_v1.0'}</verAplic>
+        <dhEvento>${dhEvento}</dhEvento>
+        <CNPJAutor>${cnpjAutor}</CNPJAutor>
+        <chNFSe>${chaveAcesso}</chNFSe>
+        <e105102>
+            <xDesc>Substituição de NFS-e</xDesc>
+            <cMotivo>${codigoMotivo}</cMotivo>
+            <xMotivo>${this.escaparXML(motivoTexto)}</xMotivo>
+            <chSubstituta>${chaveSubstituta}</chSubstituta>
+        </e105102>
     </infPedReg>
 </pedRegEvento>`;
 
@@ -75,7 +176,7 @@ class XMLEventoService {
             const { privateKeyPem, certificatePem, certBase64 } = 
                 CertificadoService.extrairCertificadoPEM(certificadoBuffer, senha);
 
-            // Extrair o ID do infPedReg (formato: Id="ID...")
+            // Extrair o ID do infPedReg (formato: Id="PRE...")
             const idMatch = xmlString.match(/Id="([^"]+)"/);
             if (!idMatch) {
                 throw new Error('ID do elemento infPedReg não encontrado');
@@ -177,130 +278,6 @@ class XMLEventoService {
     }
 
     /**
-     * Formata data/hora no padrão ISO com timezone de Brasília
-     * Formato: 2025-07-07T10:52:56-03:00
-     */
-    static formatarDataHora(data) {
-        const pad = (n) => n.toString().padStart(2, '0');
-        
-        // Calcula horário de Brasília (UTC-3)
-        const utcMs = data.getTime() + (data.getTimezoneOffset() * 60000);
-        const brasiliaMs = utcMs - (3 * 3600000);
-        const dataBrasilia = new Date(brasiliaMs);
-        
-        const ano = dataBrasilia.getUTCFullYear();
-        const mes = pad(dataBrasilia.getUTCMonth() + 1);
-        const dia = pad(dataBrasilia.getUTCDate());
-        const hora = pad(dataBrasilia.getUTCHours());
-        const min = pad(dataBrasilia.getUTCMinutes());
-        const seg = pad(dataBrasilia.getUTCSeconds());
-        
-        return `${ano}-${mes}-${dia}T${hora}:${min}:${seg}-03:00`;
-    }
-
-    /**
-     * Escapa caracteres especiais XML
-     */
-    static escaparXML(texto) {
-        if (!texto) return '';
-        return texto
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&apos;');
-    }
-
-    /**
-     * Códigos de justificativa de cancelamento (TSCodJustCanc)
-     */
-    static CODIGOS_CANCELAMENTO = {
-        1: 'Erro na emissão',
-        2: 'Serviço não prestado',
-        3: 'Erro de assinatura',
-        4: 'Duplicidade da nota',
-        5: 'Erro de processamento',
-        9: 'Outros'
-    };
-
-    /**
-     * Códigos de motivo de substituição
-     */
-    static CODIGOS_SUBSTITUICAO = {
-        1: 'Erro no valor do serviço',
-        2: 'Erro nos dados do tomador',
-        3: 'Erro na descrição do serviço',
-        4: 'Erro na tributação',
-        9: 'Outros'
-    };
-
-    /**
-     * Gera XML de pedido de registro de evento de SUBSTITUIÇÃO
-     * Evento: e105102 (Substituição de NFS-e)
-     * 
-     * @param {Object} dados
-     * @param {string} dados.chaveAcesso - Chave da NFS-e a ser substituída (50 dígitos)
-     * @param {string} dados.chaveSubstituta - Chave da nova NFS-e substituta (50 dígitos)
-     * @param {string} dados.cnpjAutor - CNPJ do autor do evento (14 dígitos)
-     * @param {number} dados.codigoMotivo - Código do motivo (1-9)
-     * @param {string} dados.motivoTexto - Descrição do motivo
-     * @param {string} dados.tipoAmbiente - 1=Prod, 2=Homolog
-     * @param {string} dados.versaoAplicacao - Ex: "NFSeAPI_v1.0"
-     */
-    static montarXMLSubstituicao(dados) {
-        const {
-            chaveAcesso,      // Chave da NFS-e ORIGINAL (a ser substituída)
-            chaveSubstituta,  // Chave da NFS-e NOVA (substituta)
-            cnpjAutor,
-            codigoMotivo,
-            motivoTexto,
-            tipoAmbiente,
-            versaoAplicacao
-        } = dados;
-
-        // Validações
-        if (!chaveAcesso || chaveAcesso.length !== 50) {
-            throw new Error('Chave de acesso da NFS-e original deve ter 50 dígitos');
-        }
-        if (!chaveSubstituta || chaveSubstituta.length !== 50) {
-            throw new Error('Chave de acesso da NFS-e substituta deve ter 50 dígitos');
-        }
-        if (!cnpjAutor || cnpjAutor.length !== 14) {
-            throw new Error('CNPJ do autor deve ter 14 dígitos');
-        }
-        if (!codigoMotivo || codigoMotivo < 1 || codigoMotivo > 9) {
-            throw new Error('Código do motivo deve ser entre 1 e 9');
-        }
-
-        const agora = new Date();
-        const dhEvento = this.formatarDataHora(agora);
-        
-        // ID: PRE + chNFSe(50) + tpEvento(6) + nSeqEvento(3)
-        // tpEvento para substituição = 105102
-        const idPedReg = `PRE${chaveAcesso}105102001`;
-
-        const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<pedRegEvento xmlns="${this.NAMESPACE}" versao="${this.VERSAO}">
-    <infPedReg Id="${idPedReg}">
-        <tpAmb>${tipoAmbiente}</tpAmb>
-        <verAplic>${versaoAplicacao || 'NFSeAPI_v1.0'}</verAplic>
-        <dhEvento>${dhEvento}</dhEvento>
-        <CNPJAutor>${cnpjAutor}</CNPJAutor>
-        <chNFSe>${chaveAcesso}</chNFSe>
-        <nPedRegEvento>1</nPedRegEvento>
-        <e105102>
-            <xDesc>Substituição de NFS-e</xDesc>
-            <cMotivo>${codigoMotivo}</cMotivo>
-            <xMotivo>${this.escaparXML(motivoTexto)}</xMotivo>
-            <chSubstituta>${chaveSubstituta}</chSubstituta>
-        </e105102>
-    </infPedReg>
-</pedRegEvento>`;
-
-        return xml;
-    }
-
-    /**
      * Processa substituição completa: monta XML, assina e comprime
      * 
      * FLUXO DE SUBSTITUIÇÃO:
@@ -346,6 +323,41 @@ class XMLEventoService {
             chaveSubstituta: dados.chaveSubstituta,
             tipoEvento: '105102'
         };
+    }
+
+    /**
+     * Formata data/hora no padrão ISO com timezone de Brasília
+     * Formato: 2025-07-07T10:52:56-03:00
+     */
+    static formatarDataHora(data) {
+        const pad = (n) => n.toString().padStart(2, '0');
+        
+        // Calcula horário de Brasília (UTC-3)
+        const utcMs = data.getTime() + (data.getTimezoneOffset() * 60000);
+        const brasiliaMs = utcMs - (3 * 3600000);
+        const dataBrasilia = new Date(brasiliaMs);
+        
+        const ano = dataBrasilia.getUTCFullYear();
+        const mes = pad(dataBrasilia.getUTCMonth() + 1);
+        const dia = pad(dataBrasilia.getUTCDate());
+        const hora = pad(dataBrasilia.getUTCHours());
+        const min = pad(dataBrasilia.getUTCMinutes());
+        const seg = pad(dataBrasilia.getUTCSeconds());
+        
+        return `${ano}-${mes}-${dia}T${hora}:${min}:${seg}-03:00`;
+    }
+
+    /**
+     * Escapa caracteres especiais XML
+     */
+    static escaparXML(texto) {
+        if (!texto) return '';
+        return texto
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
     }
 }
 
