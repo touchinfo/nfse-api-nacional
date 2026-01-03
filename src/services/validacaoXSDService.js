@@ -88,6 +88,84 @@ class ValidacaoXSDService {
         }
     };
 
+    static async extrairDadosParaValidacao(xmlString) {
+    const parser = new xml2js.Parser({ 
+        explicitArray: false,
+        ignoreAttrs: false,
+        attrkey: '@',
+        charkey: '_'
+    });
+    
+    try {
+        const result = await parser.parseStringPromise(xmlString);
+        const dps = result.DPS || result['ns:DPS'] || result;
+        const infDPS = dps.infDPS || dps['ns:infDPS'];
+        
+        if (!infDPS) {
+            throw new Error('Elemento infDPS não encontrado no XML');
+        }
+        
+        // ✅ NOVO: Extrai dados de substituição (se existir)
+        const subst = infDPS.subst || infDPS['ns:subst'];
+        const chNFSeSubst = this.extrairValor(subst?.chNFSeSubst);
+        
+        if (chNFSeSubst) {
+            console.log(`   🔄 Substituição detectada: ${chNFSeSubst}`);
+        } else {
+            console.log(`   📝 DPS normal (sem substituição)`);
+        }
+        
+        // Extrai dados do prestador
+        const prest = infDPS.prest || infDPS['ns:prest'];
+        const cnpjPrestador = this.extrairValor(prest?.CNPJ);
+        const cMunPrest = this.extrairValor(prest?.cMun);
+        
+        // Extrai dados do tomador
+        const toma = infDPS.toma || infDPS['ns:toma'];
+        const cnpjTomador = this.extrairValor(toma?.CNPJ);
+        const cpfTomador = this.extrairValor(toma?.CPF);
+        
+        // Extrai valores
+        const valores = infDPS.valores || infDPS['ns:valores'];
+        
+        return {
+            raw: infDPS,
+            infDPS: {
+                id: infDPS['@']?.Id || infDPS['$']?.Id,
+                versao: infDPS['@']?.versao || infDPS['$']?.versao,
+                tpAmb: this.extrairValor(infDPS.tpAmb),
+                dhEmi: this.extrairValor(infDPS.dhEmi),
+                verAplic: this.extrairValor(infDPS.verAplic),
+                nDPS: this.extrairValor(infDPS.nDPS),
+                serie: this.extrairValor(infDPS.serie),
+                tpEmis: this.extrairValor(infDPS.tpEmis),
+                
+                // ✅ NOVO: Informações de substituição
+                substituicao: chNFSeSubst ? {
+                    chNFSeSubst: chNFSeSubst,
+                    ehSubstituicao: true
+                } : null,
+                
+                cnpjPrestador,
+                cMunPrest,
+                cnpjTomador,
+                cpfTomador,
+                xNomeTomador: this.extrairValor(toma?.xNome),
+                valores: {
+                    vServPrestado: this.extrairValor(valores?.vServPrestado),
+                    vBCISS: this.extrairValor(valores?.vBCISS),
+                    pISS: this.extrairValor(valores?.pISS),
+                    vISS: this.extrairValor(valores?.vISS),
+                    vLiq: this.extrairValor(valores?.vLiq)
+                }
+            }
+        };
+        
+    } catch (error) {
+        throw new Error(`Erro ao extrair dados do XML: ${error.message}`);
+    }
+}
+
     /**
      * Regras de negócio específicas do emissor nacional
      */

@@ -99,7 +99,7 @@ class SefinService {
                 rejectUnauthorized: SefinConfig.validarSSL()
             });
             
-            const urlSefin = SefinConfig.getURLSefin();
+            const urlSefin = `${SefinConfig.getURLSefin()}/SefinNacional/nfse`;
             
             console.log(`  → POST ${urlSefin}`);
             

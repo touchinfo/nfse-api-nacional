@@ -94,6 +94,76 @@ class XMLService {
     };
   }
 
+  // TRECHO A SER MODIFICADO em src/services/xmlService.js
+// Procure pela função processarXML e modifique conforme abaixo:
+
+static async processarXML(xmlString, cnpjEmpresa) {
+    const validacaoXSD = await ValidacaoXSDService.validarXMLCompleto(xmlString);
+
+    if (!validacaoXSD.valido) {
+        const errosFormatados = validacaoXSD.erros.map(erro => ({
+            codigo: erro.codigo,
+            mensagem: erro.mensagem,
+            campo: erro.campo
+        }));
+
+        throw new Error(JSON.stringify({
+            tipo: 'VALIDACAO_XSD',
+            mensagem: 'XML não está em conformidade com o schema do emissor nacional',
+            erros: errosFormatados,
+            totalErros: errosFormatados.length
+        }));
+    }
+
+    const infoDPS = {
+        idDPS: validacaoXSD.dados.id,
+        numeroDPS: validacaoXSD.dados.nDPS,
+        serieDPS: validacaoXSD.dados.serie,
+        cnpjPrestador: validacaoXSD.dados.cnpjPrestador,
+        cnpjTomador: validacaoXSD.dados.cnpjTomador,
+        cpfTomador: validacaoXSD.dados.cpfTomador,
+        
+        // ✅ NOVO: Adicionar informação de substituição
+        substituicao: validacaoXSD.dados.substituicao
+    };
+    
+    // ✅ NOVO: Log para identificar substituição
+    if (infoDPS.substituicao?.ehSubstituicao) {
+        console.log(`\n🔄 SUBSTITUIÇÃO DETECTADA NO XML`);
+        console.log(`   Nota a ser substituída: ${infoDPS.substituicao.chNFSeSubst}`);
+        console.log(`   Nova nota (DPS ${infoDPS.numeroDPS}): será emitida e registrará substituição`);
+        console.log();
+    }
+
+    if (infoDPS.cnpjPrestador !== cnpjEmpresa) {
+        throw new Error(
+            `CNPJ do prestador no XML (${infoDPS.cnpjPrestador}) ` +
+            `não corresponde ao CNPJ autenticado (${cnpjEmpresa})`
+        );
+    }
+
+    const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
+
+    const xmlAssinado = this.assinarXML(
+        xmlString,
+        certInfo.certificadoBuffer,
+        certInfo.senha
+    );
+
+    const dpsXmlGZipB64 = this.comprimirECodificar(xmlAssinado);
+
+    return {
+        infoDPS,
+        xmlAssinado,
+        dpsXmlGZipB64,
+        empresaId: certInfo.empresaId,
+        validacao: {
+            tempoValidacao: validacaoXSD.tempoValidacao,
+            warnings: validacaoXSD.warnings || []
+        }
+    };
+}
+
   static assinarXML(xmlString, certificadoBuffer, senha) {
     try {
       console.log('  → Extraindo certificado e chave privada...');

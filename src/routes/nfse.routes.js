@@ -874,6 +874,14 @@ router.post('/emitir',
             const responseData = {
                 sucesso: dadosNFSe.sucesso,
                 transmissaoId,
+                    ...(resultado.infoDPS.substituicao?.ehSubstituicao && {
+                    substituicao: {
+                        tipo: 'substituicao_via_xml',
+                        chaveSubstituida: resultado.infoDPS.substituicao.chNFSeSubst,
+                        mensagem: 'XML de substituição enviado - aguardando validação da SEFIN',
+                        aviso: 'A SEFIN validará se a nota referenciada existe e pode ser substituída'
+                    }
+                }),
                 dps: {
                     idDPS: resultado.infoDPS.idDPS,
                     numeroDPS: resultado.infoDPS.numeroDPS,
@@ -962,6 +970,59 @@ router.post('/validar',
                     });
                 }
             } catch (e) {}
+            next(error);
+        }
+    }
+);
+/**
+ * POST /api/nfse/:chaveAcesso/substituir
+ */
+router.post('/:chaveAcesso/substituir',
+    verificarCertificado,
+    [
+        body('chaveSubstituta')
+            .notEmpty().withMessage('Chave substituta obrigatória')
+            .isLength({ min: 50, max: 50 }),
+        body('codigoMotivo')
+            .isInt({ min: 1, max: 9 }),
+        body('motivo')
+            .isLength({ min: 15 })
+    ],
+    validarErros,
+    async (req, res, next) => {
+        try {
+            const { chaveAcesso } = req.params;
+            const { chaveSubstituta, codigoMotivo, motivo } = req.body;
+            
+            const SefinEventoService = require('../services/sefinEventoService');
+            
+            const resultado = await SefinEventoService.enviarEventoSubstituicao({
+                chaveAcesso,
+                chaveSubstituta,
+                codigoMotivo: parseInt(codigoMotivo),
+                motivoTexto: motivo,
+                versaoAplicacao: 'NFSeAPI_v1.0'
+            }, req.empresa.cnpj);
+            
+            if (resultado.sucesso) {
+                res.json({
+                    sucesso: true,
+                    mensagem: 'NFS-e substituída com sucesso',
+                    evento: {
+                        tipoEvento: '105102',
+                        chaveOriginal: chaveAcesso,
+                        chaveSubstituta,
+                        protocolo: resultado.respostaSefin?.protocolo
+                    }
+                });
+            } else {
+                res.status(400).json({
+                    sucesso: false,
+                    erro: resultado.erro,
+                    detalhes: resultado.respostaSefin
+                });
+            }
+        } catch (error) {
             next(error);
         }
     }
