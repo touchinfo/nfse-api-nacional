@@ -318,22 +318,22 @@ static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
         }
     }
 
-/**
- * Monta link de consulta
- */
 static montarLinkConsulta(chaveAcesso, tipoAmbiente) {
-    const urlBase = tipoAmbiente === '1'
+    // ✅ CORRIGIDO: Prioriza SEFIN_AMBIENTE do .env
+    const ambiente = process.env.SEFIN_AMBIENTE || tipoAmbiente;
+    const urlBase = ambiente === '1'
         ? 'https://sefin.nfse.gov.br'
         : 'https://sefin.producaorestrita.nfse.gov.br';
 
     return `${urlBase}/SefinNacional/nfse/${chaveAcesso}`;
 }
-
 /**
  * Monta link do PDF (DANFSE)
  */
 static montarLinkPDF(chaveAcesso, tipoAmbiente) {
-    const urlBase = tipoAmbiente === '1'
+    // ✅ CORRIGIDO: Prioriza SEFIN_AMBIENTE do .env
+    const ambiente = process.env.SEFIN_AMBIENTE || tipoAmbiente;
+    const urlBase = ambiente === '1'
         ? 'https://adn.nfse.gov.br'
         : 'https://adn.producaorestrita.nfse.gov.br';
 

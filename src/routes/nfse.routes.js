@@ -1139,7 +1139,7 @@ router.get('/:chaveAcesso/pdf', verificarCertificado, async (req, res, next) => 
         const { chaveAcesso } = req.params;
         const { formato } = req.query; // ?formato=base64 para retornar em JSON
         const cnpjEmpresa = req.empresa.cnpj;
-        const tipoAmbiente = req.empresa.tipo_ambiente;
+        const tipoAmbiente = process.env.SEFIN_AMBIENTE || req.empresa.tipo_ambiente;
         
         console.log(`📥 Baixando PDF da NFS-e: ${chaveAcesso.substring(0, 20)}...`);
         
