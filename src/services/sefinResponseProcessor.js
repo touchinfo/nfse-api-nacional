@@ -4,11 +4,26 @@ const zlib = require('zlib');
 const { query } = require('../config/database');
 const CertificadoService = require('./certificadoService');
 const XMLExtractor = require('../utils/xmlExtractor');
+const SefinConfig = require('./sefinConfig');
 
 /**
  * Service para processar resposta completa da SEFIN
  */
 class SefinResponseProcessor {
+        /**
+     * Monta link de consulta da NFS-e
+     */
+    static montarLinkConsulta(chaveAcesso) {
+        return `${SefinConfig.getURLSefin()}/SefinNacional/nfse/${chaveAcesso}`;
+    }
+
+    /**
+     * Monta link do PDF (DANFSE)
+     */
+    static montarLinkPDF(chaveAcesso) {
+        return `${SefinConfig.getURLADN()}/danfse/${chaveAcesso}`;
+    }
+
 
     /**
      * Descomprime Base64 GZIP para XML
@@ -192,109 +207,109 @@ class SefinResponseProcessor {
         }
     }
 
-/**
- * Consulta dados completos da NFS-e autorizada
- */
-/**
- * Consulta dados completos da NFS-e autorizada
- */
-static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
-    try {
-        console.log(`   → Consultando NFS-e...`);
+  /**
+     * Consulta dados completos da NFS-e autorizada
+     */
+    static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa) {
+        try {
+            console.log(`   → Consultando NFS-e...`);
 
-        // ... (código de certificado e httpsAgent mantém igual) ...
-        const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
-        const { privateKeyPem, certificatePem } = CertificadoService.extrairCertificadoPEM(certInfo.certificadoBuffer, certInfo.senha);
-        
-        const httpsAgent = new https.Agent({
-            cert: certificatePem,
-            key: privateKeyPem,
-            rejectUnauthorized: tipoAmbiente === '1'
-        });
+            const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
+            
+            const { privateKeyPem, certificatePem } = 
+                CertificadoService.extrairCertificadoPEM(
+                    certInfo.certificadoBuffer,
+                    certInfo.senha
+                );
+            
+            const httpsAgent = new https.Agent({
+                cert: certificatePem,
+                key: privateKeyPem,
+                rejectUnauthorized: SefinConfig.validarSSL()
+            });
 
-        const urlSefin = tipoAmbiente === '1'
-            ? 'https://sefin.nfse.gov.br'
-            : 'https://sefin.producaorestrita.nfse.gov.br';
+            const urlCompleta = `${SefinConfig.getURLSefin()}/SefinNacional/nfse/${chaveAcesso}`;
 
-        const urlCompleta = `${urlSefin}/SefinNacional/nfse/${chaveAcesso}`;
+            const response = await axios.get(urlCompleta, {
+                headers: { 'Accept': 'application/json' },
+                httpsAgent: httpsAgent,
+                timeout: 30000
+            });
 
-        const response = await axios.get(urlCompleta, {
-            headers: { 'Accept': 'application/json' },
-            httpsAgent: httpsAgent,
-            timeout: 30000
-        });
+            const dados = response.data;
+            console.log('   ✓ Dados recebidos da SEFIN');
 
-        const dados = response.data;
-        console.log('   ✓ Dados recebidos da SEFIN');
+            // Descomprime XML se disponível
+            let xmlNFSe = null;
+            if (dados.nfseXmlGZipB64) {
+                console.log('   → Descomprimindo XML...');
+                xmlNFSe = this.decodificarEDescomprimir(dados.nfseXmlGZipB64);
+            }
 
-        // DESCOMPRIME O XML
-        let xmlNFSe = null;
-        if (dados.nfseXmlGZipB64) {
-            console.log('   → Descomprimindo XML da NFS-e...');
-            xmlNFSe = this.decodificarEDescomprimir(dados.nfseXmlGZipB64);
-        }
+            // Extrai dados do XML se disponível
+            let numeroNFSe = dados.numero || dados.numeroNFSe || null;
+            let codigoVerificacao = dados.codigoVerificacao || dados.codVerificacao || null;
 
-        // --- CORREÇÃO: EXTRAÇÃO DE DADOS DO XML (FALLBACK) ---
-        // A API às vezes retorna nulos, então extraímos do XML se disponível
-        let numeroNFSe = dados.numero || dados.numeroNFSe || null;
-        let codigoVerificacao = dados.codigoVerificacao || dados.codVerificacao || null;
-
-        if (xmlNFSe) {
-            // 1. Força busca do Número da Nota (<nNFSe>)
-            if (!numeroNFSe) {
-                const matchNum = xmlNFSe.match(/<nNFSe>(.*?)<\/nNFSe>/);
-                if (matchNum) {
-                    numeroNFSe = matchNum[1];
-                    console.log(`   ✓ Número NFS-e recuperado do XML: ${numeroNFSe}`);
+            if (xmlNFSe) {
+                if (!numeroNFSe) {
+                    const matchNumero = xmlNFSe.match(/<nNFSe>(\d+)<\/nNFSe>/);
+                    numeroNFSe = matchNumero ? matchNumero[1] : null;
+                }
+                
+                if (!codigoVerificacao) {
+                    const matchCodigo = xmlNFSe.match(/<codVerificacao>([^<]+)<\/codVerificacao>/);
+                    codigoVerificacao = matchCodigo ? matchCodigo[1] : null;
                 }
             }
 
-            // 2. Tenta busca do Código de Verificação (opcional, pois pode não existir)
-            if (!codigoVerificacao) {
-                const matchCod = xmlNFSe.match(/<(?:codVerificacao|codVerif|cVerif)>(.*?)<\/(?:codVerificacao|codVerif|cVerif)>/);
-                if (matchCod) {
-                    codigoVerificacao = matchCod[1];
-                }
+            return {
+                sucesso: true,
+                chaveAcesso: chaveAcesso,
+                numeroNFSe: numeroNFSe,
+                codigoVerificacao: codigoVerificacao,
+                dataEmissao: dados.dataEmissao || dados.dhEmi || null,
+                situacao: dados.situacao || 'Normal',
+                xmlNFSe: xmlNFSe,
+                dadosCompletos: dados
+            };
+
+        } catch (error) {
+            console.error('   ❌ Erro ao consultar NFS-e:', error.message);
+            
+            if (error.response?.status === 404) {
+                return {
+                    sucesso: false,
+                    erro: 'NFS-e não encontrada'
+                };
             }
+
+            return {
+                sucesso: false,
+                erro: error.message
+            };
         }
-        // -----------------------------------------------------
-
-        const resultado = {
-            sucesso: true,
-            numeroNFSe: numeroNFSe, // Agora preenchido pelo Regex
-            codigoVerificacao: codigoVerificacao, // Pode ser null se não existir no XML
-            dataEmissao: dados.dataEmissao || dados.dhEmi || dados.dataHoraProcessamento || null,
-            situacao: dados.situacao || 'Autorizada',
-            xmlNFSe: xmlNFSe,
-            nfseXmlGZipB64: dados.nfseXmlGZipB64,
-            dadosCompletos: dados
-        };
-
-        return resultado;
-
-    } catch (error) {
-        // ... (tratamento de erro mantém igual) ...
-        console.error('   ✗ Erro ao consultar NFS-e:', error.message);
-        if (error.response?.status === 404) {
-            return { sucesso: false, erro: 'NFS-e ainda não disponível para consulta' };
-        }
-        return { sucesso: false, erro: error.message };
     }
-}
 
-    static async consultarChaveAcesso(idDPS, cnpjEmpresa, tipoAmbiente) {
+      /**
+     * Busca chave de acesso pelo ID da DPS
+     */
+    static async buscarChaveAcessoPorDPS(idDPS, cnpjEmpresa) {
         try {
             const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
-            const { privateKeyPem, certificatePem } = CertificadoService.extrairCertificadoPEM(certInfo.certificadoBuffer, certInfo.senha);
+            
+            const { privateKeyPem, certificatePem } = 
+                CertificadoService.extrairCertificadoPEM(
+                    certInfo.certificadoBuffer,
+                    certInfo.senha
+                );
 
             const httpsAgent = new https.Agent({
                 cert: certificatePem,
                 key: privateKeyPem,
-                rejectUnauthorized: tipoAmbiente === '1'
+                rejectUnauthorized: SefinConfig.validarSSL()
             });
 
-            const urlSefin = tipoAmbiente === '1' ? 'https://sefin.nfse.gov.br/SefinNacional' : 'https://sefin.producaorestrita.nfse.gov.br/SefinNacional';
-            const urlCompleta = `${urlSefin}/dps/${idDPS}`;
+            const urlCompleta = `${SefinConfig.getURLSefin()}/SefinNacional/dps/${idDPS}`;
 
             const response = await axios.get(urlCompleta, {
                 headers: { 'Accept': 'application/json' },
@@ -317,38 +332,14 @@ static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
             return { sucesso: false, erro: error.message };
         }
     }
-
-static montarLinkConsulta(chaveAcesso, tipoAmbiente) {
-    // ✅ CORRIGIDO: Prioriza SEFIN_AMBIENTE do .env
-    const ambiente = process.env.SEFIN_AMBIENTE || tipoAmbiente;
-    const urlBase = ambiente === '1'
-        ? 'https://sefin.nfse.gov.br'
-        : 'https://sefin.producaorestrita.nfse.gov.br';
-
-    return `${urlBase}/SefinNacional/nfse/${chaveAcesso}`;
-}
-/**
- * Monta link do PDF (DANFSE)
- */
-static montarLinkPDF(chaveAcesso, tipoAmbiente) {
-    // ✅ CORRIGIDO: Prioriza SEFIN_AMBIENTE do .env
-    const ambiente = process.env.SEFIN_AMBIENTE || tipoAmbiente;
-    const urlBase = ambiente === '1'
-        ? 'https://adn.nfse.gov.br'
-        : 'https://adn.producaorestrita.nfse.gov.br';
-
-    return `${urlBase}/danfse/${chaveAcesso}`;
-}
-
-/**
+  /**
      * Baixa o PDF (DANFSE) da SEFIN e retorna em Base64
-     * Utiliza o certificado digital para autenticação
      */
-    static async baixarPDFBase64(chaveAcesso, cnpjEmpresa, tipoAmbiente) {
+    static async baixarPDFBase64(chaveAcesso, cnpjEmpresa) {
         try {
-            console.log(`   → Baixando PDF para chave: ${chaveAcesso}`);
+            const ambiente = SefinConfig.getNomeAmbiente();
+            console.log(`   → Baixando PDF (Ambiente: ${ambiente})`);
 
-            // 1. Prepara o certificado
             const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
             
             const { privateKeyPem, certificatePem } = 
@@ -360,30 +351,23 @@ static montarLinkPDF(chaveAcesso, tipoAmbiente) {
             const httpsAgent = new https.Agent({
                 cert: certificatePem,
                 key: privateKeyPem,
-                rejectUnauthorized: tipoAmbiente === '1' // Valida SSL apenas em produção
+                rejectUnauthorized: SefinConfig.validarSSL()
             });
 
-            // 2. Define a URL correta do PDF
-            const urlBase = tipoAmbiente === '1'
-                ? 'https://adn.nfse.gov.br'
-                : 'https://adn.producaorestrita.nfse.gov.br';
+            const urlPDF = `${SefinConfig.getURLADN()}/danfse/${chaveAcesso}`;
             
-            const urlPDF = `${urlBase}/danfse/${chaveAcesso}`;
+            console.log(`   → GET ${urlPDF}`);
 
-            // 3. Faz a requisição para pegar o binário do PDF
             const response = await axios.get(urlPDF, {
                 httpsAgent: httpsAgent,
-                responseType: 'arraybuffer', // Essencial para arquivos binários
+                responseType: 'arraybuffer',
                 timeout: 30000
             });
 
-            // 4. Converte Buffer para Base64
             const pdfBase64 = Buffer.from(response.data, 'binary').toString('base64');
-            
-            // Calcula tamanho aproximado em KB para log/retorno
-            const tamanhoKB = (pdfBase64.length * 0.75 / 1024).toFixed(2); 
+            const tamanhoKB = (pdfBase64.length * 0.75 / 1024).toFixed(2);
 
-            console.log(`   ✓ PDF baixado com sucesso (${tamanhoKB} KB)`);
+            console.log(`   ✓ PDF baixado (${tamanhoKB} KB)`);
 
             return {
                 sucesso: true,
@@ -392,7 +376,7 @@ static montarLinkPDF(chaveAcesso, tipoAmbiente) {
             };
 
         } catch (error) {
-            console.error('   ❌ Erro ao baixar PDF:', error.message);
+            console.error('   ❌ Erro ao baixar PDF:', error.message);
             
             let msgErro = error.message;
             if (error.response && error.response.status === 404) {

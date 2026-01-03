@@ -3,81 +3,50 @@ const https = require('https');
 const { query } = require('../config/database');
 const CertificadoService = require('./certificadoService');
 const XMLEventoService = require('./xmlEventoService');
+const SefinConfig = require('./sefinConfig');
 
 /**
  * Service para comunicação com a SEFIN Nacional
  */
 class SefinService {
-
-    /**
-     * Retorna a URL da SEFIN baseada no ambiente
-     */
-    static getURLSefin(tipoAmbiente) {
-        return tipoAmbiente === '1' 
-            ? process.env.SEFIN_URL_PRODUCAO
-            : process.env.SEFIN_URL_HOMOLOGACAO;
-    }
-
-    /**
-     * Retorna a URL base da ADN (Ambiente de Disponibilização Nacional)
-     */
-    static getURLADN(tipoAmbiente) {
-        return tipoAmbiente === '1'
-            ? 'https://adn.nfse.gov.br'
-            : 'https://adn.producaorestrita.nfse.gov.br';
-    }
-
-    /**
+   /**
      * Consulta os parâmetros de convênio de um município
      */
-    static async consultarParametrosConvenio(codigoMunicipio, cnpjEmpresa, tipoAmbiente = '2') {
+    static async consultarParametrosConvenio(codigoMunicipio, cnpjEmpresa) {
         try {
+            const ambiente = SefinConfig.getNomeAmbiente();
             console.log(`🔍 Consultando parâmetros de convênio do município ${codigoMunicipio}...`);
+            console.log(`   Ambiente: ${ambiente}`);
             
-            // Busca certificado para mTLS
-            console.log('  → Configurando certificado para autenticação mTLS...');
             const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
             
-            // Extrai certificado em formato PEM
             const { privateKeyPem, certificatePem } = 
                 CertificadoService.extrairCertificadoPEM(
                     certInfo.certificadoBuffer,
                     certInfo.senha
                 );
             
-            // Cria HTTPS Agent com o certificado (mTLS)
             const httpsAgent = new https.Agent({
                 cert: certificatePem,
                 key: privateKeyPem,
-                rejectUnauthorized: tipoAmbiente === '1' // Mais rigoroso em produção
+                rejectUnauthorized: SefinConfig.validarSSL()
             });
             
-            console.log('  → Certificado configurado para mTLS');
+            const urlCompleta = `${SefinConfig.getURLADN()}/parametrizacao/${codigoMunicipio}/convenio`;
             
-            // Monta URL da ADN
-            const urlADN = this.getURLADN(tipoAmbiente);
-            const urlCompleta = `${urlADN}/parametrizacao/${codigoMunicipio}/convenio`;
+            console.log(`  → GET ${urlCompleta}`);
             
-            console.log(`  → Consultando: ${urlCompleta}`);
-            
-            // Marca tempo de início
             const inicioConsulta = Date.now();
             
-            // Envia requisição
-            const response = await axios.get(
-                urlCompleta,
-                {
-                    headers: {
-                        'Accept': 'application/json'
-                    },
-                    httpsAgent: httpsAgent,
-                    timeout: parseInt(process.env.SEFIN_TIMEOUT) || 30000
-                }
-            );
+            const response = await axios.get(urlCompleta, {
+                headers: { 'Accept': 'application/json' },
+                httpsAgent: httpsAgent,
+                timeout: parseInt(process.env.SEFIN_TIMEOUT) || 30000
+            });
             
             const tempoProcessamento = Date.now() - inicioConsulta;
             
-            console.log(`✅ Parâmetros obtidos com sucesso (${tempoProcessamento}ms)`);
+            console.log(`✅ Parâmetros obtidos (${tempoProcessamento}ms)`);
             
             return {
                 sucesso: true,
@@ -89,7 +58,6 @@ class SefinService {
         } catch (error) {
             console.error('❌ Erro ao consultar parâmetros:', error.message);
             
-            // Se a ADN retornou erro estruturado
             if (error.response) {
                 return {
                     sucesso: false,
@@ -100,7 +68,6 @@ class SefinService {
                 };
             }
             
-            // Erros de rede ou timeout
             return {
                 sucesso: false,
                 erro: error.message,
@@ -109,42 +76,35 @@ class SefinService {
         }
     }
 
-    /**
+   /**
      * Envia a DPS para a SEFIN Nacional
      */
-    static async enviarDPS(dpsXmlGZipB64, cnpjEmpresa, tipoAmbiente = '2') {
+    static async enviarDPS(dpsXmlGZipB64, cnpjEmpresa) {
         try {
+            const ambiente = SefinConfig.getNomeAmbiente();
             console.log('📤 Enviando DPS para SEFIN Nacional...');
+            console.log(`   Ambiente: ${ambiente}`);
             
-            // Busca certificado para mTLS
-            console.log('  → Configurando certificado para autenticação mTLS...');
             const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
             
-            // Extrai certificado em formato PEM
             const { privateKeyPem, certificatePem } = 
                 CertificadoService.extrairCertificadoPEM(
                     certInfo.certificadoBuffer,
                     certInfo.senha
                 );
             
-            // Cria HTTPS Agent com o certificado (mTLS)
             const httpsAgent = new https.Agent({
                 cert: certificatePem,
                 key: privateKeyPem,
-                rejectUnauthorized: tipoAmbiente === '1' // Mais rigoroso em produção
+                rejectUnauthorized: SefinConfig.validarSSL()
             });
             
-            console.log('  → Certificado configurado para mTLS');
+            const urlSefin = SefinConfig.getURLSefin();
             
-            // Monta URL da SEFIN
-            const urlSefin = this.getURLSefin(tipoAmbiente);
+            console.log(`  → POST ${urlSefin}`);
             
-            console.log(`  → Enviando para: ${urlSefin}`);
-            
-            // Marca tempo de início
             const inicioEnvio = Date.now();
             
-            // Envia requisição
             const response = await axios.post(
                 urlSefin,
                 { dpsXmlGZipB64 },
@@ -160,7 +120,7 @@ class SefinService {
             
             const tempoProcessamento = Date.now() - inicioEnvio;
             
-            console.log(`✅ Resposta recebida da SEFIN (${tempoProcessamento}ms)`);
+            console.log(`✅ Resposta da SEFIN (${tempoProcessamento}ms)`);
             
             return {
                 sucesso: true,
@@ -172,7 +132,6 @@ class SefinService {
         } catch (error) {
             console.error('❌ Erro ao enviar para SEFIN:', error.message);
             
-            // Se a SEFIN retornou erro estruturado
             if (error.response) {
                 return {
                     sucesso: false,
@@ -183,7 +142,6 @@ class SefinService {
                 };
             }
             
-            // Erros de rede ou timeout
             return {
                 sucesso: false,
                 erro: error.message,
@@ -191,7 +149,6 @@ class SefinService {
             };
         }
     }
-
     /**
      * Registra transmissão no banco de dados
      */
@@ -353,18 +310,14 @@ class SefinService {
         
         return transmissao;
     }
-     /**
+
+  /**
      * Consulta TODOS os eventos registrados de uma NFS-e
-     * GET /nfse/{chaveAcesso}/eventos
-     * 
-     * Response da SEFIN: Array de eventos
-     * Cada evento pode ter campos diferentes dependendo do que a SEFIN retornar
      */
-    static async consultarEventosNFSe(chaveAcesso, cnpjEmpresa, tipoAmbiente, descomprimirXML = false) {
+    static async consultarEventosNFSe(chaveAcesso, cnpjEmpresa, descomprimirXML = false) {
         try {
-            console.log(`🔍 Consultando todos os eventos da NFS-e: ${chaveAcesso.substring(0, 20)}...`);
+            console.log(`🔍 Consultando eventos da NFS-e: ${chaveAcesso.substring(0, 20)}...`);
             
-            // Busca certificado para mTLS
             const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
             
             const { privateKeyPem, certificatePem } = 
@@ -373,114 +326,68 @@ class SefinService {
                     certInfo.senha
                 );
             
-            // HTTPS Agent com mTLS
             const httpsAgent = new https.Agent({
                 cert: certificatePem,
                 key: privateKeyPem,
-                rejectUnauthorized: tipoAmbiente === '1'
+                rejectUnauthorized: SefinConfig.validarSSL()
             });
             
-            // URL correta
-            const urlBase = tipoAmbiente === '1'
-                ? 'https://sefin.nfse.gov.br'
-                : 'https://sefin.producaorestrita.nfse.gov.br';
-            
-            const urlCompleta = `${urlBase}/SefinNacional/nfse/${chaveAcesso}/eventos`;
+            const urlCompleta = `${SefinConfig.getURLSefin()}/SefinNacional/nfse/${chaveAcesso}/eventos`;
             
             console.log(`  → GET ${urlCompleta}`);
             
-            const inicioConsulta = Date.now();
-            
-            // Faz requisição GET
             const response = await axios.get(urlCompleta, {
                 headers: { 'Accept': 'application/json' },
                 httpsAgent: httpsAgent,
                 timeout: 30000
             });
             
-            const tempoProcessamento = Date.now() - inicioConsulta;
+            let eventos = Array.isArray(response.data) ? response.data : [];
             
-            console.log(`✅ Eventos consultados (${tempoProcessamento}ms)`);
-            
-            // A SEFIN pode retornar array vazio [] ou array com objetos
-            let eventos = Array.isArray(response.data) ? response.data : (response.data ? [response.data] : []);
-            
-            // Se solicitado, descomprime os XMLs
+            // Descomprime XMLs se solicitado
             if (descomprimirXML && eventos.length > 0) {
-                console.log(`  → Descomprimindo ${eventos.length} evento(s)...`);
+                const SefinResponseProcessor = require('./sefinResponseProcessor');
                 eventos = eventos.map(evento => {
                     if (evento.eventoXmlGZipB64) {
                         try {
-                            const xmlDescomprimido = this.decodificarEDescomprimir(evento.eventoXmlGZipB64);
-                            return {
-                                ...evento,
-                                eventoXML: xmlDescomprimido
-                            };
-                        } catch (error) {
-                            console.warn(`  ⚠️ Erro ao descomprimir evento: ${error.message}`);
-                            return evento;
+                            evento.eventoXML = SefinResponseProcessor.decodificarEDescomprimir(evento.eventoXmlGZipB64);
+                        } catch (e) {
+                            console.error('Erro ao descomprimir XML do evento:', e.message);
                         }
                     }
                     return evento;
                 });
             }
             
+            console.log(`✅ ${eventos.length} evento(s) encontrado(s)`);
+            
             return {
                 sucesso: true,
-                status: response.status,
                 quantidade: eventos.length,
-                eventos: eventos,
-                tempoProcessamento
+                eventos: eventos
             };
             
         } catch (error) {
-            console.error('❌ Erro ao consultar eventos:', error.message);
-            
-            if (error.response) {
-                // 404 = Nenhum evento encontrado (normal)
-                if (error.response.status === 404) {
-                    return {
-                        sucesso: true,
-                        status: 404,
-                        quantidade: 0,
-                        eventos: [],
-                        mensagem: 'Nenhum evento registrado para esta NFS-e'
-                    };
-                }
-                
-                return {
-                    sucesso: false,
-                    status: error.response.status,
-                    erro: `Erro HTTP ${error.response.status}`,
-                    detalhes: error.response.data
-                };
+            if (error.response?.status === 404) {
+                return { sucesso: true, quantidade: 0, eventos: [], status: 404 };
             }
             
+            console.error('❌ Erro ao consultar eventos:', error.message);
             return {
                 sucesso: false,
                 erro: error.message,
-                tipo: error.code || 'ERRO_DESCONHECIDO'
+                status: error.response?.status || 500
             };
         }
     }
 
-    /**
-     * Consulta um evento ESPECÍFICO por tipo e sequência
-     * GET /nfse/{chaveAcesso}/eventos/{tipoEvento}/{numSeqEvento}
-     * 
-     * Response da SEFIN:
-     * {
-     *   "tipoAmbiente": 1,
-     *   "versaoAplicativo": "string",
-     *   "dataHoraProcessamento": "2025-12-26T19:55:10.0901489-03:00",
-     *   "eventoXmlGZipB64": "string"
-     * }
+  /**
+     * Consulta um evento ESPECÍFICO
      */
-    static async consultarEventoEspecifico(chaveAcesso, tipoEvento, numSeqEvento, cnpjEmpresa, tipoAmbiente, descomprimirXML = false) {
+    static async consultarEventoEspecifico(chaveAcesso, tipoEvento, numSeqEvento, cnpjEmpresa, descomprimirXML = false) {
         try {
-            console.log(`🔍 Consultando evento tipo ${tipoEvento} seq ${numSeqEvento} da NFS-e: ${chaveAcesso.substring(0, 20)}...`);
+            console.log(`🔍 Consultando evento tipo ${tipoEvento} seq ${numSeqEvento}`);
             
-            // Busca certificado para mTLS
             const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
             
             const { privateKeyPem, certificatePem } = 
@@ -489,74 +396,57 @@ class SefinService {
                     certInfo.senha
                 );
             
-            // HTTPS Agent com mTLS
             const httpsAgent = new https.Agent({
                 cert: certificatePem,
                 key: privateKeyPem,
-                rejectUnauthorized: tipoAmbiente === '1'
+                rejectUnauthorized: SefinConfig.validarSSL()
             });
             
-            // URL correta
-            const urlBase = tipoAmbiente === '1'
-                ? 'https://sefin.nfse.gov.br'
-                : 'https://sefin.producaorestrita.nfse.gov.br';
-            
-            const urlCompleta = `${urlBase}/SefinNacional/nfse/${chaveAcesso}/eventos/${tipoEvento}/${numSeqEvento}`;
+            const urlCompleta = `${SefinConfig.getURLSefin()}/SefinNacional/nfse/${chaveAcesso}/eventos/${tipoEvento}/${numSeqEvento}`;
             
             console.log(`  → GET ${urlCompleta}`);
             
-            const inicioConsulta = Date.now();
-            
-            // Faz requisição GET
             const response = await axios.get(urlCompleta, {
                 headers: { 'Accept': 'application/json' },
                 httpsAgent: httpsAgent,
                 timeout: 30000
             });
             
-            const tempoProcessamento = Date.now() - inicioConsulta;
+            let evento = response.data;
             
-            console.log(`✅ Evento consultado (${tempoProcessamento}ms)`);
-            
-            const dados = response.data;
-            
-            // Se solicitado, descomprime o XML
-            if (descomprimirXML && dados.eventoXmlGZipB64) {
-                console.log(`  → Descomprimindo XML do evento...`);
+            if (descomprimirXML && evento.eventoXmlGZipB64) {
+                const SefinResponseProcessor = require('./sefinResponseProcessor');
                 try {
-                    dados.eventoXML = this.decodificarEDescomprimir(dados.eventoXmlGZipB64);
-                } catch (error) {
-                    console.warn(`  ⚠️ Erro ao descomprimir: ${error.message}`);
+                    evento.eventoXML = SefinResponseProcessor.decodificarEDescomprimir(evento.eventoXmlGZipB64);
+                } catch (e) {
+                    console.error('Erro ao descomprimir XML:', e.message);
                 }
             }
             
+            console.log(`✅ Evento encontrado`);
+            
             return {
                 sucesso: true,
-                status: response.status,
-                evento: dados,
-                tempoProcessamento
+                evento: evento
             };
             
         } catch (error) {
-            console.error('❌ Erro ao consultar evento específico:', error.message);
-            
-            if (error.response) {
+            if (error.response?.status === 404) {
                 return {
                     sucesso: false,
-                    status: error.response.status,
-                    erro: `Erro HTTP ${error.response.status}`,
-                    detalhes: error.response.data
+                    status: 404,
+                    erro: 'Evento não encontrado'
                 };
             }
             
+            console.error('❌ Erro ao consultar evento:', error.message);
             return {
                 sucesso: false,
                 erro: error.message,
-                tipo: error.code || 'ERRO_DESCONHECIDO'
+                status: error.response?.status || 500
             };
         }
     }
-
     /**
      * Registra um evento na NFS-e (cancelamento, carta de correção, etc)
      * POST /nfse/{chaveAcesso}/eventos
