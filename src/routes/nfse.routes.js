@@ -8,6 +8,7 @@ const SefinService = require('../services/sefinService');
 const SefinResponseProcessor = require('../services/sefinResponseProcessor');
 const { query } = require('../config/database');
 const SefinConfig = require('../services/sefinConfig'); 
+const CertificadoService = require('../services/certificadoService');
 
 const router = express.Router();
 
@@ -399,39 +400,12 @@ router.get('/:chaveAcesso/eventos/:tipoEvento/:numSeqEvento', verificarCertifica
     }
 });
 
-/**
- * ADICIONE ESTE CÓDIGO NO SEU nfse.routes.js
- * 
- * Adicione os imports no topo:
- * const XMLEventoService = require('../services/xmlEventoService');
- * const SefinEventoService = require('../services/sefinEventoService');
- */
-
-/**
- * POST /api/nfse/:chaveAcesso/cancelar
- * Cancela uma NFS-e emitida
- * 
- * URL: /api/nfse/33045572201800344000148000000000002325124472728969/cancelar
- * 
- * Body:
- *   {
- *     "codigoMotivo": "1",
- *     "motivo": "Erro no serviço prestado"
- *   }
- */
 router.post('/:chaveAcesso/cancelar',
     verificarCertificado,
-    [
-        body('codigoMotivo').notEmpty().withMessage('Código do motivo é obrigatório'),
-        body('motivo').notEmpty().withMessage('Motivo é obrigatório')
-    ],
-    validarErros,
     async (req, res, next) => {
         try {
             const { chaveAcesso } = req.params;
-            const { codigoMotivo, motivo } = req.body;
             const cnpjEmpresa = req.empresa.cnpj;
-            const tipoAmbiente = req.empresa.tipo_ambiente;
 
             // Validar chave de acesso (50 dígitos)
             if (!chaveAcesso || chaveAcesso.length !== 50) {
@@ -445,30 +419,80 @@ router.post('/:chaveAcesso/cancelar',
             console.log('\n' + '='.repeat(70));
             console.log(`🚫 CANCELAMENTO - Empresa: ${req.empresa.razao_social}`);
             console.log(`   Chave: ${chaveAcesso}`);
-            console.log(`   Motivo: ${codigoMotivo} - ${motivo}`);
             console.log('='.repeat(70));
 
-            // 1. Processa o evento de cancelamento
             const XMLEventoService = require('../services/xmlEventoService');
             const SefinEventoService = require('../services/sefinEventoService');
 
-            const resultado = await XMLEventoService.processarCancelamento({
-                chaveAcesso,
-                codigoMotivo: parseInt(codigoMotivo),
-                motivoTexto: motivo,
-                tipoAmbiente,
-                versaoAplicacao: 'NFSeAPI_v1.0'
-            }, cnpjEmpresa);
+            let eventoXmlGZipB64;
 
-            // 2. Envia para SEFIN (chaveAcesso vai na URL)
+            // ✅ VERIFICA QUAL FORMATO FOI ENVIADO
+            if (req.body.xml) {
+                // ========================================
+                // FORMATO 1: XML COMPLETO (do front-end)
+                // ========================================
+                console.log('📄 Recebendo XML completo do cliente...');
+                
+                const xmlEvento = req.body.xml;
+                
+                // Valida se o XML tem a estrutura correta
+                if (!xmlEvento.includes('<pedRegEvento') || !xmlEvento.includes('<e101101>')) {
+                    return res.status(400).json({
+                        sucesso: false,
+                        erro: 'XML de cancelamento inválido',
+                        detalhes: 'XML deve conter <pedRegEvento> e <e101101>'
+                    });
+                }
+
+                // Busca certificado para assinar e comprimir
+                const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
+
+                // Assina o XML
+                console.log('🔐 Assinando XML...');
+                const xmlAssinado = XMLEventoService.assinarXMLEvento(
+                    xmlEvento,
+                    certInfo.certificadoBuffer,
+                    certInfo.senha
+                );
+
+                // Comprime
+                console.log('📦 Comprimindo XML...');
+                eventoXmlGZipB64 = XMLEventoService.comprimirECodificar(xmlAssinado);
+
+            } else if (req.body.motivo && req.body.codigoMotivo) {
+                // ========================================
+                // FORMATO 2: JSON SIMPLES (compatibilidade)
+                // ========================================
+                console.log('📝 Recebendo JSON (motivo + código)...');
+                console.log(`   Motivo: ${req.body.codigoMotivo} - ${req.body.motivo}`);
+
+                const resultado = await XMLEventoService.processarCancelamento({
+                    chaveAcesso,
+                    codigoMotivo: parseInt(req.body.codigoMotivo),
+                    motivoTexto: req.body.motivo,
+                    tipoAmbiente: req.empresa.tipo_ambiente,
+                    versaoAplicacao: 'NFSeAPI_v1.0'
+                }, cnpjEmpresa);
+
+                eventoXmlGZipB64 = resultado.eventoXmlGZipB64;
+
+            } else {
+                // Nenhum formato válido
+                return res.status(400).json({
+                    sucesso: false,
+                    erro: 'Formato inválido',
+                    mensagem: 'Envie {"xml": "..."} OU {"motivo": "...", "codigoMotivo": "1"}'
+                });
+            }
+
+            // Envia para SEFIN
             const respostaSefin = await SefinEventoService.enviarEvento(
-                resultado.eventoXmlGZipB64,
-                chaveAcesso,  // chave vai na URL: /nfse/{chaveAcesso}/eventos
-                cnpjEmpresa,
-                tipoAmbiente
+                eventoXmlGZipB64,
+                chaveAcesso,
+                cnpjEmpresa
             );
 
-            // 3. Processa resposta
+            // Processa resposta
             if (respostaSefin.sucesso) {
                 console.log('✅ Cancelamento processado com sucesso!');
 
