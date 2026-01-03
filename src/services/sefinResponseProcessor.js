@@ -334,7 +334,7 @@ static montarLinkConsulta(chaveAcesso, tipoAmbiente) {
  */
 static montarLinkPDF(chaveAcesso, tipoAmbiente) {
     const urlBase = tipoAmbiente === '1'
-        ? 'https://adn.producao.nfse.gov.br'
+        ? 'https://adn.nfse.gov.br'
         : 'https://adn.producaorestrita.nfse.gov.br';
 
     return `${urlBase}/danfse/${chaveAcesso}`;
@@ -365,7 +365,7 @@ static montarLinkPDF(chaveAcesso, tipoAmbiente) {
 
             // 2. Define a URL correta do PDF
             const urlBase = tipoAmbiente === '1'
-                ? 'https://adn.producao.nfse.gov.br'
+                ? 'https://adn.nfse.gov.br'
                 : 'https://adn.producaorestrita.nfse.gov.br';
             
             const urlPDF = `${urlBase}/danfse/${chaveAcesso}`;

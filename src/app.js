@@ -38,21 +38,6 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Logging de requisições
 app.use(requestLogger);
 
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutos
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
-    message: {
-        sucesso: false,
-        erro: 'Muitas requisições. Tente novamente mais tarde.'
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-    validate: false 
-});
-
-app.use('/api/', limiter);
-
 // ============================================
 // ROTAS
 // ============================================

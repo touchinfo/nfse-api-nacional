@@ -23,7 +23,7 @@ class SefinService {
      */
     static getURLADN(tipoAmbiente) {
         return tipoAmbiente === '1'
-            ? 'https://adn.producao.nfse.gov.br'
+            ? 'https://adn.nfse.gov.br'
             : 'https://adn.producaorestrita.nfse.gov.br';
     }
 
