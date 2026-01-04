@@ -859,17 +859,61 @@ router.post('/emitir',
                     }
                 }
             } else {
-                dadosNFSe = {
-                    sucesso: false,
-                    mensagem: respostaSefin.dados?.mensagem || 'Erro no envio',
-                    erros: respostaSefin.dados?.erros || []
-                };
-                mensagemUsuario = dadosNFSe.mensagem;
+                // ✅ VERIFICA SE É ERRO E0014 (DUPLICIDADE)
+                const erroE0014 = respostaSefin.dados?.erros?.find(
+                    e => e.Codigo === 'E0014' || e.codigo === 'E0014'
+                );
+                
+                if (erroE0014) {
+                    console.log('🔄 Erro E0014 - Recuperando NFSe duplicada...');
+                    
+                    const idDPS = resultado.infoDPS.idDPS;
+                    const chaveResult = await SefinResponseProcessor.buscarChaveAcessoPorDPS(
+                        idDPS,
+                        cnpjEmpresa
+                    );
+                    
+                    if (chaveResult.sucesso) {
+                        console.log('✅ NFSe duplicada encontrada!');
+                        ehDuplicidadeRecuperavel = true;
+                        
+                        dadosNFSe = await SefinResponseProcessor.consultarDadosNFSe(
+                            chaveResult.chaveAcesso,
+                            cnpjEmpresa
+                        );
+                        
+                        dadosNFSe.sucesso = true;
+                        mensagemUsuario = 'Nota Fiscal já constava na base de dados (Recuperada com sucesso)';
+                    } else {
+                        console.log('❌ Não foi possível recuperar NFSe');
+                        dadosNFSe = {
+                            sucesso: false,
+                            mensagem: respostaSefin.dados?.mensagem || 'Erro no envio',
+                            erros: respostaSefin.dados?.erros || []
+                        };
+                        mensagemUsuario = dadosNFSe.mensagem;
+                    }
+                } else {
+                    // Outros erros
+                    dadosNFSe = {
+                        sucesso: false,
+                        mensagem: respostaSefin.dados?.mensagem || 'Erro no envio',
+                        erros: respostaSefin.dados?.erros || []
+                    };
+                    mensagemUsuario = dadosNFSe.mensagem;
+                }
             }
 
             console.log('='.repeat(70));
             console.log(`✅ PROCESSO CONCLUÍDO - Tempo: ${tempoTotal}ms`);
             console.log('='.repeat(70) + '\n');
+            
+            if (dadosNFSe.xmlNFSe && !dadosNFSe.dataEmissao) {
+                const matchData = dadosNFSe.xmlNFSe.match(/<dhProc>([^<]+)<\/dhProc>/);
+                if (matchData) {
+                    dadosNFSe.dataEmissao = matchData[1];
+                }
+            }
 
             const responseData = {
                 sucesso: dadosNFSe.sucesso,
@@ -890,8 +934,6 @@ router.post('/emitir',
                 nfse: {
                     chaveAcesso: dadosNFSe.chaveAcesso,
                     numeroNFSe: dadosNFSe.numeroNFSe,
-                    codigoVerificacao: dadosNFSe.codigoVerificacao,
-                    linkConsulta: dadosNFSe.linkConsulta,
                     dataEmissao: dadosNFSe.dataEmissao,
                     situacao: dadosNFSe.situacao,
                     xmlNFSe: dadosNFSe.xmlNFSe || null
@@ -1036,11 +1078,9 @@ router.get('/consultar-por-chave/:chaveAcesso', verificarCertificado, async (req
     try {
         const { chaveAcesso } = req.params;
         const cnpjEmpresa = req.empresa.cnpj;
-        const tipoAmbiente = req.empresa.tipo_ambiente;
         
         console.log(`🔍 Consultando NFS-e por chave: ${chaveAcesso.substring(0, 20)}...`);
         
-        // Valida chave de acesso (NFS-e Nacional = 50 caracteres)
         if (!chaveAcesso || chaveAcesso.length !== 50) {
             return res.status(400).json({
                 sucesso: false,
@@ -1051,8 +1091,7 @@ router.get('/consultar-por-chave/:chaveAcesso', verificarCertificado, async (req
         
         const resultado = await SefinResponseProcessor.consultarDadosNFSe(
             chaveAcesso,
-            cnpjEmpresa,
-            tipoAmbiente
+            cnpjEmpresa
         );
         
         if (!resultado.sucesso) {
@@ -1062,18 +1101,27 @@ router.get('/consultar-por-chave/:chaveAcesso', verificarCertificado, async (req
                 detalhes: resultado.erro
             });
         }
+
+        // ✅ EXTRAI dataEmissao do XML se não veio
+        let dataEmissao = resultado.dataEmissao;
+        
+        if (resultado.xmlNFSe && !dataEmissao) {
+            const matchData = resultado.xmlNFSe.match(/<dhProc>([^<]+)<\/dhProc>/);
+            if (matchData) {
+                dataEmissao = matchData[1];
+            }
+        }
         
         res.json({
             sucesso: true,
             nfse: {
                 chaveAcesso: chaveAcesso,
                 numeroNFSe: resultado.numeroNFSe,
-                codigoVerificacao: resultado.codigoVerificacao,
-                dataEmissao: resultado.dataEmissao,
+                dataEmissao: dataEmissao,
                 situacao: resultado.situacao,
-                linkConsulta: SefinResponseProcessor.montarLinkConsulta(chaveAcesso, tipoAmbiente)
+                linkConsulta: SefinResponseProcessor.montarLinkConsulta(chaveAcesso)
             },
-            dadosCompletos: resultado.dadosCompletos
+            xml: resultado.xmlNFSe
         });
         
     } catch (error) {
@@ -1081,7 +1129,6 @@ router.get('/consultar-por-chave/:chaveAcesso', verificarCertificado, async (req
         next(error);
     }
 });
-
 /**
  * GET /api/nfse/:chaveAcesso/xml
  * Retorna o XML completo da NFS-e

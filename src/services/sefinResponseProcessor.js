@@ -10,7 +10,7 @@ const SefinConfig = require('./sefinConfig');
  * Service para processar resposta completa da SEFIN
  */
 class SefinResponseProcessor {
-        /**
+    /**
      * Monta link de consulta da NFS-e
      */
     static montarLinkConsulta(chaveAcesso) {
@@ -24,15 +24,41 @@ class SefinResponseProcessor {
         return `${SefinConfig.getURLADN()}/danfse/${chaveAcesso}`;
     }
 
+    /**
+     * ✅ NOVO: Corrige encoding UTF-8 mal interpretado
+     */
+    static corrigirEncodingUTF8(texto) {
+        try {
+            // Se já está correto, retorna
+            if (!texto.includes('Ã§') && !texto.includes('Ã£') && !texto.includes('Ã¡')) {
+                return texto;
+            }
+            
+            // Converte de Latin1 mal interpretado para UTF-8 correto
+            const buffer = Buffer.from(texto, 'latin1');
+            return buffer.toString('utf-8');
+        } catch (error) {
+            console.warn('⚠️  Erro ao corrigir encoding:', error.message);
+            return texto;
+        }
+    }
 
     /**
      * Descomprime Base64 GZIP para XML
+     * ✅ MODIFICADO: Força UTF-8 e corrige encoding
      */
     static decodificarEDescomprimir(base64String) {
         try {
             const compressed = Buffer.from(base64String, 'base64');
             const decompressed = zlib.gunzipSync(compressed);
-            return decompressed.toString('utf-8');
+            
+            // ✅ FORÇA UTF-8 EXPLICITAMENTE
+            let xml = decompressed.toString('utf-8');
+            
+            // ✅ CORRIGE SE VIER COM ENCODING ERRADO
+            xml = this.corrigirEncodingUTF8(xml);
+            
+            return xml;
         } catch (error) {
             throw new Error(`Erro ao descomprimir XML: ${error.message}`);
         }
@@ -57,6 +83,7 @@ class SefinResponseProcessor {
                 protocolo: null,
                 chaveAcesso: null,
                 numeroNFSe: null,
+                codigoVerificacao: null,
                 linkConsulta: null,
                 dataEmissao: null,
                 situacao: null,
@@ -110,6 +137,61 @@ class SefinResponseProcessor {
                 }
             }
 
+            // ✅ CORREÇÃO 1: Extrai dados do XML se já vier na resposta inicial (situação "Normal")
+            if (dadosSefin.xml && resultado.chaveAcesso) {
+                console.log('   → XML já disponível na resposta inicial!');
+                try {
+                    // ✅ CORREÇÃO 2: Corrige encoding UTF-8
+                    resultado.xmlNFSe = this.corrigirEncodingUTF8(dadosSefin.xml);
+                    
+                    // Extrai número da NFSe
+                    const matchNumero = resultado.xmlNFSe.match(/<nNFSe>(\d+)<\/nNFSe>/);
+                    if (matchNumero) {
+                        resultado.numeroNFSe = matchNumero[1];
+                        console.log(`   ✓ Número NFSe: ${resultado.numeroNFSe}`);
+                    }
+                    
+                    // Extrai data de emissão (dhProc)
+                    const matchData = resultado.xmlNFSe.match(/<dhProc>([^<]+)<\/dhProc>/);
+                    if (matchData) {
+                        resultado.dataEmissao = matchData[1];
+                        console.log(`   ✓ Data Emissão: ${resultado.dataEmissao}`);
+                    }
+                    
+                    // Extrai código de verificação se existir
+                    const matchCodVerif = resultado.xmlNFSe.match(/<codVerificacao>([^<]+)<\/codVerificacao>/);
+                    if (matchCodVerif) {
+                        resultado.codigoVerificacao = matchCodVerif[1];
+                    }
+                    
+                    // Define situação
+                    resultado.situacao = dadosSefin.situacao || 'Normal';
+                    
+                    // Extrai DPS limpa
+                    try {
+                        resultado.dpsLimpa = XMLExtractor.extrairDPSLimpa(resultado.xmlNFSe);
+                        console.log('   ✓ DPS limpa extraída!');
+                    } catch (error) {
+                        console.warn(`   ⚠️  Erro ao extrair DPS: ${error.message}`);
+                    }
+                    
+                    // Marca como sucesso
+                    resultado.sucesso = true;
+                    resultado.statusProcessamento = 'CONCLUIDA';
+                    resultado.mensagem = 'NFS-e emitida com sucesso';
+                    resultado.linkConsulta = this.montarLinkConsulta(resultado.chaveAcesso);
+                    
+                    console.log('✅ Processamento completo (dados da resposta inicial)!\n');
+                    console.log(`   Status final: ${resultado.statusProcessamento}`);
+                    
+                    return resultado;
+                    
+                } catch (error) {
+                    console.warn(`   ⚠️  Erro ao processar XML inicial: ${error.message}`);
+                    // Continua para tentar consulta adicional
+                }
+            }
+
             let tentativas = 0;
             const maxTentativas = 3;
             
@@ -151,24 +233,18 @@ class SefinResponseProcessor {
                 resultado.numeroNFSe = dadosNFSeResult.numeroNFSe;
                 resultado.dataEmissao = dadosNFSeResult.dataEmissao;
                 resultado.situacao = dadosNFSeResult.situacao;
+                resultado.codigoVerificacao = dadosNFSeResult.codigoVerificacao;
                 resultado.dadosCompletos = dadosNFSeResult.dadosCompletos;
                 
-                if (dadosNFSeResult.nfseXmlGZipB64) {
-                    console.log('   → Descomprimindo XML...');
+                if (dadosNFSeResult.xmlNFSe) {
+                    resultado.xmlNFSe = dadosNFSeResult.xmlNFSe;
+                    
+                    // Extrai DPS limpa (sem correção de encoding)
                     try {
-                        resultado.xmlNFSe = this.decodificarEDescomprimir(dadosNFSeResult.nfseXmlGZipB64);
-                        console.log('   ✓ XML descomprimido!');
-                        
-                        // Extrai DPS limpa (sem correção de encoding)
-                        try {
-                            resultado.dpsLimpa = XMLExtractor.extrairDPSLimpa(resultado.xmlNFSe);
-                            console.log('   ✓ DPS limpa extraída!');
-                        } catch (error) {
-                            console.error('   ✗ Erro ao extrair DPS:', error.message);
-                        }
-                        
+                        resultado.dpsLimpa = XMLExtractor.extrairDPSLimpa(resultado.xmlNFSe);
+                        console.log('   ✓ DPS limpa extraída!');
                     } catch (error) {
-                        console.warn(`   ⚠️  Erro ao descomprimir: ${error.message}`);
+                        console.error('   ✗ Erro ao extrair DPS:', error.message);
                     }
                 }
                 
@@ -189,7 +265,7 @@ class SefinResponseProcessor {
                 resultado.mensagem = 'DPS aceita. Dados completos em breve.';
             }
 
-            resultado.linkConsulta = this.montarLinkConsulta(resultado.chaveAcesso, tipoAmbiente);
+            resultado.linkConsulta = this.montarLinkConsulta(resultado.chaveAcesso);
 
             console.log('✅ Processamento completo!\n');
             console.log(`   Status final: ${resultado.statusProcessamento}`);
@@ -207,7 +283,7 @@ class SefinResponseProcessor {
         }
     }
 
-  /**
+    /**
      * Consulta dados completos da NFS-e autorizada
      */
     static async consultarDadosNFSe(chaveAcesso, cnpjEmpresa) {
@@ -290,7 +366,50 @@ class SefinResponseProcessor {
         }
     }
 
-      /**
+    /**
+     * Consulta a chave de acesso pelo ID da DPS
+     */
+    static async consultarChaveAcesso(idDPS, cnpjEmpresa) {
+        try {
+            const certInfo = await CertificadoService.buscarCertificadoPorCNPJ(cnpjEmpresa);
+            
+            const { privateKeyPem, certificatePem } = 
+                CertificadoService.extrairCertificadoPEM(
+                    certInfo.certificadoBuffer,
+                    certInfo.senha
+                );
+
+            const httpsAgent = new https.Agent({
+                cert: certificatePem,
+                key: privateKeyPem,
+                rejectUnauthorized: SefinConfig.validarSSL()
+            });
+
+            const urlCompleta = `${SefinConfig.getURLSefin()}/SefinNacional/dps/${idDPS}`;
+
+            const response = await axios.get(urlCompleta, {
+                headers: { 'Accept': 'application/json' },
+                httpsAgent: httpsAgent,
+                timeout: 30000
+            });
+
+            const chaveAcesso = response.data?.chaveAcesso || response.data?.ChaveAcesso;
+
+            if (!chaveAcesso) {
+                return { sucesso: false, erro: 'Chave não disponível' };
+            }
+
+            return { sucesso: true, chaveAcesso: chaveAcesso };
+
+        } catch (error) {
+            if (error.response?.status === 404) {
+                return { sucesso: false, erro: 'DPS ainda não processada' };
+            }
+            return { sucesso: false, erro: error.message };
+        }
+    }
+
+    /**
      * Busca chave de acesso pelo ID da DPS
      */
     static async buscarChaveAcessoPorDPS(idDPS, cnpjEmpresa) {
@@ -332,7 +451,8 @@ class SefinResponseProcessor {
             return { sucesso: false, erro: error.message };
         }
     }
-  /**
+
+    /**
      * Baixa o PDF (DANFSE) da SEFIN e retorna em Base64
      */
     static async baixarPDFBase64(chaveAcesso, cnpjEmpresa) {
@@ -411,6 +531,7 @@ class SefinResponseProcessor {
             const params = [
                 dadosNFSe.chaveAcesso,
                 dadosNFSe.numeroNFSe,
+                dadosNFSe.codigoVerificacao,
                 dadosNFSe.linkConsulta,
                 dadosNFSe.dataEmissao,
                 dadosNFSe.situacao,
