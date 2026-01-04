@@ -137,35 +137,51 @@ class SefinResponseProcessor {
                 }
             }
 
-            // ✅ CORREÇÃO 1: Extrai dados do XML se já vier na resposta inicial (situação "Normal")
+            // ✅ CORREÇÃO 1: Extrai dados do XML se já vier na resposta inicial
             if (dadosSefin.xml && resultado.chaveAcesso) {
                 console.log('   → XML já disponível na resposta inicial!');
                 try {
                     // ✅ CORREÇÃO 2: Corrige encoding UTF-8
                     resultado.xmlNFSe = this.corrigirEncodingUTF8(dadosSefin.xml);
                     
-                    // Extrai número da NFSe
+                    // ✅ Extrai número da NFSe
                     const matchNumero = resultado.xmlNFSe.match(/<nNFSe>(\d+)<\/nNFSe>/);
                     if (matchNumero) {
                         resultado.numeroNFSe = matchNumero[1];
                         console.log(`   ✓ Número NFSe: ${resultado.numeroNFSe}`);
                     }
                     
-                    // Extrai data de emissão (dhProc)
+                    // ✅ Extrai data de emissão (dhProc)
                     const matchData = resultado.xmlNFSe.match(/<dhProc>([^<]+)<\/dhProc>/);
                     if (matchData) {
                         resultado.dataEmissao = matchData[1];
                         console.log(`   ✓ Data Emissão: ${resultado.dataEmissao}`);
                     }
                     
-                    // Extrai código de verificação se existir
+                    // ✅ Extrai código de verificação se existir
                     const matchCodVerif = resultado.xmlNFSe.match(/<codVerificacao>([^<]+)<\/codVerificacao>/);
                     if (matchCodVerif) {
                         resultado.codigoVerificacao = matchCodVerif[1];
+                        console.log(`   ✓ Código Verificação: ${resultado.codigoVerificacao}`);
                     }
                     
-                    // Define situação
-                    resultado.situacao = dadosSefin.situacao || 'Normal';
+                    // ✅ NOVO: Extrai situação do cStat
+                    let situacao = dadosSefin.situacao || null;
+                    if (!situacao) {
+                        const matchCstat = resultado.xmlNFSe.match(/<cStat>(\d+)<\/cStat>/);
+                        if (matchCstat) {
+                            const cStat = matchCstat[1];
+                            const mapaSituacao = {
+                                '100': 'Autorizada',
+                                '101': 'Cancelada', 
+                                '102': 'Substituída',
+                                '103': 'Denegada'
+                            };
+                            situacao = mapaSituacao[cStat] || `cStat ${cStat}`;
+                            console.log(`   ✓ Situação extraída: ${situacao} (cStat: ${cStat})`);
+                        }
+                    }
+                    resultado.situacao = situacao;
                     
                     // Extrai DPS limpa
                     try {
@@ -191,6 +207,7 @@ class SefinResponseProcessor {
                     // Continua para tentar consulta adicional
                 }
             }
+
 
             let tentativas = 0;
             const maxTentativas = 3;
@@ -325,16 +342,35 @@ class SefinResponseProcessor {
             // Extrai dados do XML se disponível
             let numeroNFSe = dados.numero || dados.numeroNFSe || null;
             let codigoVerificacao = dados.codigoVerificacao || dados.codVerificacao || null;
+            let situacao = dados.situacao || null;
 
             if (xmlNFSe) {
+                // ✅ EXTRAI NÚMERO
                 if (!numeroNFSe) {
                     const matchNumero = xmlNFSe.match(/<nNFSe>(\d+)<\/nNFSe>/);
                     numeroNFSe = matchNumero ? matchNumero[1] : null;
                 }
                 
+                // ✅ EXTRAI CÓDIGO VERIFICAÇÃO
                 if (!codigoVerificacao) {
                     const matchCodigo = xmlNFSe.match(/<codVerificacao>([^<]+)<\/codVerificacao>/);
                     codigoVerificacao = matchCodigo ? matchCodigo[1] : null;
+                }
+                
+                // ✅ EXTRAI SITUAÇÃO
+                if (!situacao) {
+                    const matchCstat = xmlNFSe.match(/<cStat>(\d+)<\/cStat>/);
+                    if (matchCstat) {
+                        const cStat = matchCstat[1];
+                        const mapaSituacao = {
+                            '100': 'Autorizada',
+                            '101': 'Cancelada', 
+                            '102': 'Substituída',
+                            '103': 'Denegada'
+                        };
+                        situacao = mapaSituacao[cStat] || `cStat ${cStat}`;
+                        console.log(`   ✓ Situação extraída do XML: ${situacao} (cStat: ${cStat})`);
+                    }
                 }
             }
 
@@ -344,7 +380,7 @@ class SefinResponseProcessor {
                 numeroNFSe: numeroNFSe,
                 codigoVerificacao: codigoVerificacao,
                 dataEmissao: dados.dataEmissao || dados.dhEmi || null,
-                situacao: dados.situacao || 'Normal',
+                situacao: situacao,
                 xmlNFSe: xmlNFSe,
                 dadosCompletos: dados
             };
