@@ -1,6 +1,22 @@
 const { query } = require('../config/database');
 
 /**
+ * Middleware para validar senha administrativa no corpo da requisição (POST)
+ */
+function autenticarAdmin(req, res, next) {
+    const senha_admin = req.body.senha_admin;
+    const SENHA_MESTRA = process.env.ADMIN_PASSWORD;
+
+    if (!senha_admin || senha_admin !== SENHA_MESTRA) {
+        return res.status(401).json({
+            sucesso: false,
+            erro: 'Acesso negado: Senha administrativa inválida ou não fornecida.'
+        });
+    }
+    next();
+}
+
+/**
  * Middleware de autenticação via API Key
  */
 async function autenticarAPIKey(req, res, next) {
@@ -84,5 +100,6 @@ async function autenticarOpcional(req, res, next) {
 
 module.exports = {
     autenticarAPIKey,
-    autenticarOpcional
+    autenticarOpcional,
+    autenticarAdmin
 }
