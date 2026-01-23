@@ -9,6 +9,7 @@ const { autenticarAPIKey } = require('./middlewares/auth');
 const { errorHandler, notFoundHandler, requestLogger } = require('./middlewares/errorHandler');
 const nfseRoutes = require('./routes/nfse.routes');
 const adminRoutes = require('./routes/admin.routes');
+const danfseRoutes = require('./routes/danfse.routes.js');
 
 const app = express();
 
@@ -145,6 +146,8 @@ app.get('/api/docs', (req, res) => {
  * Rotas da NFS-e (protegidas por autenticação)
  */
 app.use('/api/nfse', autenticarAPIKey, nfseRoutes);
+
+app.use('/api/danfse', autenticarAPIKey, danfseRoutes);
 
 app.use('/api/admin', adminRoutes);
 
