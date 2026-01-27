@@ -10,6 +10,7 @@ const { errorHandler, notFoundHandler, requestLogger } = require('./middlewares/
 const nfseRoutes = require('./routes/nfse.routes');
 const adminRoutes = require('./routes/admin.routes');
 const danfseRoutes = require('./routes/danfse.routes.js');
+const eventosRoutes = require('./routes/eventos.routes'); 
 
 const app = express();
 
@@ -150,6 +151,8 @@ app.use('/api/nfse', autenticarAPIKey, nfseRoutes);
 app.use('/api/danfse', autenticarAPIKey, danfseRoutes);
 
 app.use('/api/admin', adminRoutes);
+
+app.use('/api/nfse', eventosRoutes);
 
 /**
  * Rota não encontrada
