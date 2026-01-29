@@ -2,12 +2,33 @@ const express = require('express');
 const router = express.Router();
 const DanfseService = require('../services/danfseService');
 const DanfseDataHelper = require('../helpers/danfseDataHelper');
+const SefinResponseProcessor = require('../services/sefinResponseProcessor');
+
+function montarDadosEmpresa(req) {
+    return {
+        cnpj: req.empresa.cnpj,
+        razao_social: req.empresa.razao_social,
+        inscricao_municipal: req.empresa.inscricao_municipal,
+        telefone: req.empresa.telefone,
+        email: req.empresa.email,
+        logradouro: req.empresa.logradouro,
+        numero: req.empresa.numero,
+        complemento: req.empresa.complemento,
+        bairro: req.empresa.bairro,
+        municipio: req.empresa.municipio,
+        uf: req.empresa.uf,
+        cep: req.empresa.cep,
+        codigo_municipio: req.empresa.codigo_municipio,
+        optante_simples: req.empresa.optante_simples,
+        regime_apuracao: req.empresa.regime_apuracao
+    };
+}
 
 
 router.post('/gerar', async (req, res, next) => {
     try {
         // ✅ Valores padrão para isCancelled e isSubst
-        const { dados, xml } = req.body;
+        const { dados, xml, chaveAcesso, chave } = req.body;
         const isCancelled = req.body.isCancelled === true;
         const isSubst = req.body.isSubst === true;
 
@@ -25,34 +46,60 @@ router.post('/gerar', async (req, res, next) => {
         // OPÇÃO 2: XML (extração automática)
         else if (xml) {
             console.log('📄 Modo: XML da NFSe');
-            
-            const dadosEmpresa = {
-                cnpj: req.empresa.cnpj,
-                razao_social: req.empresa.razao_social,
-                inscricao_municipal: req.empresa.inscricao_municipal,
-                telefone: req.empresa.telefone,
-                email: req.empresa.email,
-                logradouro: req.empresa.logradouro,
-                numero: req.empresa.numero,
-                complemento: req.empresa.complemento,
-                bairro: req.empresa.bairro,
-                municipio: req.empresa.municipio,
-                uf: req.empresa.uf,
-                cep: req.empresa.cep,
-                codigo_municipio: req.empresa.codigo_municipio,
-                optante_simples: req.empresa.optante_simples,
-                regime_apuracao: req.empresa.regime_apuracao
-            };
 
+            const dadosEmpresa = montarDadosEmpresa(req);
             dadosDanfse = await DanfseDataHelper.converterXMLParaDanfse(xml, dadosEmpresa);
             
+            console.log(`   Chave: ${dadosDanfse.ChaveAcesso}`);
+            console.log(`   Número: ${dadosDanfse.NumeroNfse}`);
+        }
+        // OPÇÃO 3: CHAVE DE ACESSO (busca XML na SEFIN)
+        else if (chaveAcesso || chave) {
+            const chaveInformada = (chaveAcesso || chave || '').trim();
+            console.log(`🔎 Modo: Chave de acesso (${chaveInformada.substring(0, 20)}...)`);
+
+            if (!chaveInformada || chaveInformada.length !== 50) {
+                return res.status(400).json({
+                    sucesso: false,
+                    erro: 'Chave de acesso inválida (deve ter 50 caracteres)',
+                    recebido: chaveInformada?.length || 0
+                });
+            }
+
+            const resultado = await SefinResponseProcessor.consultarDadosNFSe(
+                chaveInformada,
+                req.empresa.cnpj
+            );
+
+            if (!resultado.sucesso) {
+                return res.status(404).json({
+                    sucesso: false,
+                    erro: 'NFS-e não encontrada',
+                    detalhes: resultado.erro
+                });
+            }
+
+            if (!resultado.xmlNFSe) {
+                return res.status(404).json({
+                    sucesso: false,
+                    erro: 'XML da NFS-e não disponível',
+                    mensagem: 'A nota foi encontrada mas o XML ainda não está disponível para download'
+                });
+            }
+
+            const dadosEmpresa = montarDadosEmpresa(req);
+            dadosDanfse = await DanfseDataHelper.converterXMLParaDanfse(
+                resultado.xmlNFSe,
+                dadosEmpresa
+            );
+
             console.log(`   Chave: ${dadosDanfse.ChaveAcesso}`);
             console.log(`   Número: ${dadosDanfse.NumeroNfse}`);
         }
         else {
             return res.status(400).json({
                 sucesso: false,
-                erro: 'Forneça "dados" (JSON) OU "xml" (XML da NFSe)',
+                erro: 'Forneça "dados" (JSON) OU "xml" (XML da NFSe) OU "chaveAcesso"',
                 dica: 'GET /api/danfse/exemplo para ver exemplos'
             });
         }
@@ -80,6 +127,81 @@ router.post('/gerar', async (req, res, next) => {
 });
 
 /**
+ * GET /api/danfse/:chave/pdf
+ * Gera DANFSE a partir da chave de acesso (consulta XML na SEFIN)
+ *
+ * Query params:
+ *   - isCancelled=true|false
+ *   - isSubst=true|false
+ */
+router.get('/:chave/pdf', async (req, res, next) => {
+    try {
+        const { chave } = req.params;
+        const isCancelled = req.query.isCancelled === 'true' || req.query.isCancelled === '1';
+        const isSubst = req.query.isSubst === 'true' || req.query.isSubst === '1';
+
+        console.log('\n' + '='.repeat(70));
+        console.log(`📄 GERAR DANFSE (CHAVE) - Empresa: ${req.empresa.razao_social}`);
+        console.log('='.repeat(70));
+
+        if (!chave || chave.length !== 50) {
+            return res.status(400).json({
+                sucesso: false,
+                erro: 'Chave de acesso inválida (deve ter 50 caracteres)',
+                recebido: chave?.length || 0
+            });
+        }
+
+        const resultado = await SefinResponseProcessor.consultarDadosNFSe(
+            chave,
+            req.empresa.cnpj
+        );
+
+        if (!resultado.sucesso) {
+            return res.status(404).json({
+                sucesso: false,
+                erro: 'NFS-e não encontrada',
+                detalhes: resultado.erro
+            });
+        }
+
+        if (!resultado.xmlNFSe) {
+            return res.status(404).json({
+                sucesso: false,
+                erro: 'XML da NFS-e não disponível',
+                mensagem: 'A nota foi encontrada mas o XML ainda não está disponível para download'
+            });
+        }
+
+        const dadosEmpresa = montarDadosEmpresa(req);
+        const dadosDanfse = await DanfseDataHelper.converterXMLParaDanfse(
+            resultado.xmlNFSe,
+            dadosEmpresa
+        );
+
+        console.log(`   Chave: ${dadosDanfse.ChaveAcesso}`);
+        console.log(`   Número: ${dadosDanfse.NumeroNfse}`);
+        console.log(`   🏷️ Tipo: ${isSubst ? 'Substituída' : isCancelled ? 'Cancelada' : 'Normal'}`);
+
+        const pdfBuffer = await DanfseService.gerar(
+            dadosDanfse,
+            isCancelled,
+            isSubst
+        );
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="DANFSE-${dadosDanfse.ChaveAcesso || chave}.pdf"`);
+        res.send(pdfBuffer);
+
+        console.log('✅ DANFSE gerado com sucesso!');
+
+    } catch (error) {
+        console.error('❌ Erro ao gerar DANFSE pela chave:', error);
+        next(error);
+    }
+});
+
+/**
  * POST /api/danfse/lote
  * Gera múltiplos DANFSEs (JSON ou XML)
  */
@@ -99,24 +221,7 @@ router.post('/lote', async (req, res, next) => {
         }
         else if (xmlArray && Array.isArray(xmlArray)) {
             console.log(`📄 ${xmlArray.length} XMLs`);
-            
-            const dadosEmpresa = {
-                cnpj: req.empresa.cnpj,
-                razao_social: req.empresa.razao_social,
-                inscricao_municipal: req.empresa.inscricao_municipal,
-                telefone: req.empresa.telefone,
-                email: req.empresa.email,
-                logradouro: req.empresa.logradouro,
-                numero: req.empresa.numero,
-                complemento: req.empresa.complemento,
-                bairro: req.empresa.bairro,
-                municipio: req.empresa.municipio,
-                uf: req.empresa.uf,
-                cep: req.empresa.cep,
-                codigo_municipio: req.empresa.codigo_municipio,
-                optante_simples: req.empresa.optante_simples,
-                regime_apuracao: req.empresa.regime_apuracao
-            };
+            const dadosEmpresa = montarDadosEmpresa(req);
 
             for (const xml of xmlArray) {
                 try {
@@ -239,7 +344,18 @@ router.get('/exemplo', (req, res) => {
                 xml: '<?xml version="1.0" encoding="utf-8"?><NFSe>...</NFSe>',
                 isCancelled: false,
                 isSubst: false
+            },
+
+            opcao3_chave: {
+                chaveAcesso: "33033022209443542000103000000000003126010759590277",
+                isCancelled: false,
+                isSubst: false
             }
+        },
+
+        gerar_por_chave: {
+            rota: 'GET /api/danfse/:chave/pdf',
+            exemplo: '/api/danfse/33033022209443542000103000000000003126010759590277/pdf'
         },
         
         gerar_lote: {
